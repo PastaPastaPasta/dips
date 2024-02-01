@@ -22,14 +22,17 @@ exposed prematurely, and that transactions are efficiently propagated within the
 
 ### Specification
 1. **Private Transaction Submission:** Users will submit their transactions privately to a single masternode without
-exposing their IP address. This masternode serves as the entry point for the transaction into the network.
+exposing their IP address. This masternode serves as the entry point for the transaction into the network. 
+See [Lasagna](dip-lasagna.md) for more information about this system.
 
 2. **Dandelion++-like Propagation:** The receiving masternode initiates a Dandelion++-like propagation to the rest of 
 the quorum members. This involves a 'stem' phase, where the transaction is relayed through a random path of nodes to 
 obfuscate its source, followed by a 'fluff' phase, where the transaction is broadcast to all members of the quorum.
 
 3. **InstantSend Lock Creation:** The quorum members collaboratively create an InstantSend lock for the transaction. 
-This lock is created secretly among the quorum members without broadcasting the transaction or its inputs to the entire network.
+This lock is created "secretly" among the quorum members without broadcasting the transaction or its inputs to the
+entire network. While not strictly necessary, this will result in improved privacy as there is a small delay between initial
+propagation by the transaction sender and reception by the rest of the network.
 
 4. **Bundled Transaction and InstantSend Lock Broadcast:** Once the InstantSend lock is created, the transaction, 
 bundled with the InstantSend lock signature (as specified in the previous ADR), is propagated network-wide. This ensures
@@ -38,7 +41,7 @@ that peers only receive a single, validated message, confirming the transaction'
 5. **Fallback Mechanism:** If an InstantSend lock is not successfully created within a predefined timeframe
 (e.g., 10 seconds), the transaction is then broadcast network-wide without the lock, ensuring the system continues
 to function smoothly. Nodes continuously monitor for either the transaction's network-wide broadcast or the creation
-of an InstantSend lock.
+of an InstantSend lock. Once either of these is detected, the transaction should be propogated normally over the inventory system.
 
 6. **Privacy Enhancement:** The proposed method significantly enhances user privacy by ensuring that transactions are
 not exposed to potential observers until they are securely locked or deemed necessary to be broadcast without a lock.
