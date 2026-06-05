@@ -123,7 +123,7 @@ The payout list has the following structure:
 
 | Field | Type | Size | Description |
 | --- | --- | --- | --- |
-| payoutsCount | compactSize uint | 1-9 | Number of payout entries. Must be from 1 to 8. |
+| payoutsCount | uint8_t | 1 | Number of payout entries. Must be from 1 to 8. |
 | payouts | MasternodePayoutShare[] | Variable | Ordered owner payout entries. |
 
 The ordering of payout entries is consensus-significant for reward rounding.
@@ -146,7 +146,7 @@ modified by replacing `scriptPayout` with `payouts`.
 | PubKeyOperator | BLSPubKey | 48 | The public key used for operator-related signing. |
 | KeyIdVoting | CKeyID | 20 | The public key hash used for voting. |
 | operatorReward | uint16_t | 2 | Operator reward in basis points, from 0 to 10000. |
-| payoutsCount | compactSize uint | 1-9 | Number of owner payout entries. |
+| payoutsCount | uint8_t | 1 | Number of owner payout entries. |
 | payouts | MasternodePayoutShare[] | Variable | Owner payout entries. |
 | inputsHash | uint256 | 32 | The SHA256 hash of all transaction input outpoints. |
 | platform fields | Various | Variable | Platform fields for Evo masternodes, unchanged from existing provider transaction versioning. |
@@ -186,7 +186,7 @@ is modified by replacing `scriptPayout` with `payouts`.
 | mode | uint16_t | 2 | Masternode mode. |
 | PubKeyOperator | BLSPubKey | 48 | The public key used for operator-related signing. |
 | KeyIdVoting | CKeyID | 20 | The public key hash used for voting. |
-| payoutsCount | compactSize uint | 1-9 | Number of owner payout entries. |
+| payoutsCount | uint8_t | 1 | Number of owner payout entries. |
 | payouts | MasternodePayoutShare[] | Variable | Owner payout entries. |
 | inputsHash | uint256 | 32 | The SHA256 hash of all transaction input outpoints. |
 | payloadSigSize | compactSize uint | 1-9 | Size of the signature. |
