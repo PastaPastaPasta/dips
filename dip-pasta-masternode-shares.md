@@ -341,17 +341,18 @@ on the current single `scriptPayout` field does.
 
 ## Deployment and Compatibility
 
-This DIP requires a network-wide consensus upgrade. Version 4 ProRegTx and
-ProUpRegTx payloads are only valid after the deployment activates.
+This DIP is intended to deploy with Dash Core's v24 network upgrade
+(`DEPLOYMENT_V24`). Version 4 ProRegTx and ProUpRegTx payloads are only valid
+after v24 activates.
 
-Before activation:
+Before v24 activation:
 
 * Provider transaction versions greater than the current maximum valid version
   remain invalid.
 * Legacy ProRegTx and ProUpRegTx payload serialization is unchanged.
 * Legacy masternode reward payment behavior is unchanged.
 
-After activation:
+After v24 activation:
 
 * New version 4 registrations may use 1 to 8 owner payout entries.
 * Version 4 registrar updates may change the payout list.
