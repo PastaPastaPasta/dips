@@ -1,6 +1,6 @@
 <pre>
-  DIP: pasta-masternode-shares
-  Title: Masternode Reward Shares
+  DIP: pasta-multi-party-payouts
+  Title: Masternode Multi-Party Payouts
   Author(s): Pasta
   Special-Thanks:
   Comments-Summary: No comments yet.
