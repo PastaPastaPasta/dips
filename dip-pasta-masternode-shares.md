@@ -149,12 +149,17 @@ modified by replacing `scriptPayout` with `payouts`.
 | payoutsCount | uint8_t | 1 | Number of owner payout entries. |
 | payouts | MasternodePayoutShare[] | Variable | Owner payout entries. |
 | inputsHash | uint256 | 32 | The SHA256 hash of all transaction input outpoints. |
-| platform fields | Various | Variable | Platform fields for Evo masternodes, unchanged from existing provider transaction versioning. |
+| platformNodeID | uint160 | 20 | Node ID derived from the Platform P2P public key. Present only for Evo masternodes. |
 | payloadSigSize | compactSize uint | 1-9 | Size of the signature. |
 | payloadSig | unsigned char[] | Variable | Signature required for external collateral ownership proof. |
 
 For a masternode with one owner, the payout list contains exactly one entry with
 `reward = 10000`.
+
+For version 4 Evo masternode registrations, Platform P2P and HTTPS addressing
+data is encoded in `netInfo` using the extended-address provider transaction
+format. Separate `platformP2PPort` and `platformHTTPPort` fields are not
+serialized in version 4 payloads.
 
 For external collaterals, the collateral ownership sign string must include the
 new payout list representation instead of the previous single payout string. The
