@@ -2,7 +2,7 @@
 
 DIP stands for Dash Improvement Proposal. Similar to Bitcoin's [BIPs](https://github.com/bitcoin/bips/), a DIP is a design document providing information to the Dash community, or describing a new feature for Dash or its processes or environment. The DIP should provide a concise technical specification of the feature and a rationale for the feature.
 
-Because Dash is forked from the Bitcoin codebase, many of the BIPs can be applied to Dash as well (a list of the BIPs updated to include Dash-specific details can be found [here](https://github.com/dashevo/bips)). The purpose of the DIPs is not to duplicate those which exist as BIPs, but to introduce protocol upgrades or feature specifications which are unique to Dash.
+Because Dash is forked from the Bitcoin codebase, many of the BIPs can be applied to Dash as well (a list of the BIPs updated to include Dash-specific details can be found in the [Dash BIPs repository](https://github.com/dashevo/bips)). The purpose of the DIPs is not to duplicate those which exist as BIPs, but to introduce protocol upgrades or feature specifications which are unique to Dash.
 
 ## Contributions
 
@@ -41,7 +41,7 @@ Number | Layer | Title | Owner | Type | Status
 [23](dip-0023.md) | Consensus | Enhanced Hard Fork Mechanism | Pasta | Standard | Final
 [24](dip-0024.md) | Consensus | Long-Living Masternode Quorum Distribution and Rotation | Samuel Westrich & Virgile Bartolo | Standard | Final
 [25](dip-0025.md) | Peer Services | Compressed Block Headers | gabriel-bjg, Thephez, UdjinM6 | Standard | Proposed
-[26](dip-0026.md) | Consensus | Masternode Multi-Party Payouts | Pasta | Standard | Proposed
+[26](dip-0026.md) | Consensus | Masternode Multi-Party Payouts | Timothy Munsell, UdjinM6, Pasta | Standard | Proposed
 [27](dip-0027.md) | Consensus | Dash Core Credit Pool | Ivan Shumkov, Anton Suprunchuk, Thephez, Samuel Westrich | Standard | Proposed
 [28](dip-0028.md) | Consensus | Evolution Masternodes | Paul DeLucia, Odysseas Gabrielides, Łukasz Klimek, Ivan Shumkov, Samuel Westrich | Standard | Final
 [29](dip-0029.md) | Consensus | Randomness Beacon For LLMQ Selection | Virgile Bartolo | Standard | Proposed
