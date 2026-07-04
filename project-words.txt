@@ -10,6 +10,7 @@ CBLS
 CBLSIES
 cbitset
 CBOR
+ANYONECANPAY
 chainwork
 CHECKDATASIG
 CHECKDATASIGVERIFY
@@ -31,6 +32,7 @@ dptp
 dpts
 DSPC
 DVRF
+DSHC
 ECDH
 ecdh
 evonode
@@ -55,6 +57,8 @@ Keybase
 libsecp
 LLMQ
 Masternode
+malleate
+malleation
 masternodes
 mainnet
 MERKLEBLOCK
@@ -70,6 +74,8 @@ preorder
 Preorder
 preordered
 prevout
+prevouts
+ProUpServTx
 protx
 pseudorandomness
 QDATA
@@ -92,6 +98,8 @@ RIPEMD
 sendheaders
 SEPA
 signmessage
+sighash
+SIGHASH
 Skiplist
 Spork
 subtx
@@ -104,6 +112,9 @@ topups
 tprv
 tpub
 unretrievable
+unconstructable
+unlinkability
+trustlessly
 UTXO
 varint
 vvec
