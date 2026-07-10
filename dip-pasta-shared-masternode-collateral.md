@@ -252,6 +252,11 @@ There is no mode field: **the signature count defines the mode**. Exactly one
 signature — which must be by `shares[actorIndex].ownerKeyID` — is a unilateral
 dissolution. Exactly `sharesCount` signatures — one per share, in share order —
 is a unanimous dissolution. Any other count, order, or signer set is invalid.
+The signature count is committed into `SharedDisHash` (below), so the mode is
+bound into every signature: a third party cannot reinterpret a penalty-free
+unanimous dissolution as a unilateral one (or vice versa) by dropping or adding
+signatures, which would otherwise leave the inputs and outputs unchanged but
+alter the transaction identifier.
 
 A ProDisTx must have exactly one input: the masternode's collateral outpoint,
 with an empty `scriptSig`. It must have no outputs other than those required
@@ -263,11 +268,13 @@ below.
 "DashSharedMNDissolve" || payload version ||
 tx version || tx type || tx nLockTime ||
 all input prevouts || all input sequences || all outputs ||
-proTxHash || actorIndex
+proTxHash || actorIndex || sigCount
 ```
 
 The digest commits to the transaction's actual input and outputs directly; the
-payload deliberately carries no `inputsHash`/`outputsHash` copies.
+payload deliberately carries no `inputsHash`/`outputsHash` copies. It also
+commits to `sigCount`, which selects the mode, so the unilateral/unanimous
+distinction cannot be malleated after signing.
 
 #### Required penalty
 
@@ -326,9 +333,10 @@ Dash relay supports neither BIP125 replacement nor package relay, so a ProDisTx
 must embed a sufficient fee at signing time; child-pays-for-parent on the actor
 output can only raise the mining priority of a ProDisTx that already meets the
 minimum relay fee. A flat fee of roughly 100000 duffs — about one millionth of
-the minimum share — provides large fee-market headroom. Relay policy may allow
-a ProDisTx to replace a pending ProDisTx spending the same collateral when it
-pays a strictly higher fee.
+the minimum share — provides large fee-market headroom. Because Dash relay has
+no replacement mechanism, the first ProDisTx to reach the mempool for a given
+collateral wins; a competing ProDisTx conflicts on the collateral input and is
+rejected until the first is mined or dropped.
 
 Because validity is monotone and share owner keys are immutable, a signed
 ProDisTx never goes stale. Wallets should have each participant sign a
@@ -380,7 +388,6 @@ Payload:
 | proTxHash | uint256 | 32 | The ProRegTx hash of the shared masternode. |
 | pubKeyOperator | BLSPubKey | 48 | New operator public key. |
 | keyIdVoting | CKeyID | 20 | New voting key ID. |
-| operatorReward | uint16_t | 2 | New operator reward in basis points (0 to 10000). |
 | inputsHash | uint256 | 32 | Hash of all transaction inputs, as in DIP-0003 update payloads. |
 | sigCount | uint8_t | 1 | Must equal `sharesCount`. |
 | sigs | signature[sigCount] | 65 * sigCount | Canonical signatures over the payload hash (with this field empty), one per share, in share order. |
@@ -390,6 +397,10 @@ one valid signature from **every** current share owner key, in share order.
 Operator-key change semantics (service reset) match ProUpRegTx in DIP-0003. A
 ProUpSharedRegTx referencing a non-shared masternode is invalid, and a plain
 ProUpRegTx referencing a shared masternode is invalid.
+
+The operator reward is fixed at registration and is not updatable, matching the
+DIP-0003 ProUpRegTx model (where `operatorReward` is likewise immutable after
+registration); it is therefore not carried in this payload.
 
 Operator-authorized updates are unchanged: the operator continues to manage
 service fields via ProUpServTx (including the operator payout script) and may
@@ -448,6 +459,15 @@ implementations must enforce, at both mempool acceptance and block connection:
 4. Masternode removal for a shared masternode occurs only through a validated
    ProDisTx. Collateral-spend removal semantics for normal masternodes are
    unchanged (normal collateral never carries the template).
+5. A validated ProDisTx removes its masternode in the same collateral-spend
+   phase of deterministic-list construction as an ordinary collateral spend —
+   that is, after all of the block's provider transactions (registrations and
+   updates) have been applied. The dissolution is validated at its position in
+   the transaction order (so it sees the masternode and any earlier same-block
+   registration), but the removal itself is deferred to that phase. A shared
+   masternode update (ProUpShareTx or ProUpSharedRegTx) and a dissolution of the
+   same masternode may therefore appear together in one block in either order:
+   the update always applies before the removal takes effect.
 
 Mempool implementations should additionally evict pending ProUpShareTx and
 ProUpSharedRegTx transactions for a masternode when its ProDisTx confirms.
@@ -473,10 +493,27 @@ wherever a user-supplied script later becomes a consensus-mandated output:
 
 ### Special Transaction Filtering
 
-Special transaction filters and bloom filters must include every share
-`refundScript`, `rewardScript`, and `ownerKeyID` used in a shared registration,
-ProDisTx, ProUpShareTx, or ProUpSharedRegTx, in the same manner that DIP-0026
-requires for payout scripts.
+A shared **registration** carries the full share table, so special transaction
+filters and bloom filters must match it on every share `refundScript`,
+`rewardScript`, and `ownerKeyID`, in the same manner that DIP-0026 requires for
+payout scripts.
+
+The lifecycle transactions do not carry the share table — only the `proTxHash`
+identifying the masternode — so, consistent with the DIP-0003 treatment of
+ProUpRegTx and ProUpRevTx, they are matched by `proTxHash` (plus the new
+`rewardScript` for ProUpShareTx). A light client learns a masternode's share
+scripts and owner keys from the registration it matched, then follows that
+masternode's lifecycle by its `proTxHash`. Two properties make this sufficient
+in practice: the refund and reward payments produced by a ProDisTx are ordinary
+transaction outputs, matched by script in the base filter, so a client watching
+its refund or reward script sees its funds without any special-transaction
+logic; and a BIP37 bloom filter with `BLOOM_UPDATE_ALL` inserts the `proTxHash`
+automatically when it matches the registration, so an owner-key watcher receives
+subsequent lifecycle transactions without further configuration.
+
+Requiring stateless filters to match the lifecycle transactions on the share
+`ownerKeyID`s is not possible, because those transactions do not contain the
+keys and filter construction performs no masternode-list lookup.
 
 ## Deployment and Compatibility
 
