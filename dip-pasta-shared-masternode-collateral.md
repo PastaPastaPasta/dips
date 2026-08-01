@@ -100,13 +100,17 @@ This DIP is therefore a strict superset of DIP-0026:
 
 ### Provider Transaction Version
 
-This DIP extends the version 4 (`MultiPayout`) ProRegTx payload defined in
-DIP-0026, prior to its release in any Dash Core version. A version 4 ProRegTx
-with a non-zero `sharesCount` is a **shared registration**. A version 4
-ProRegTx with `sharesCount = 0` behaves exactly as specified in DIP-0026.
+This DIP extends the version 3 (extended addresses) ProRegTx payload, which
+carries the DIP-0026 `payouts` field, prior to its release in any Dash Core
+version. DIP-0026's multi-party payouts were originally specified as a separate
+version 4 (`MultiPayout`); because both versions are introduced by the same
+deployment, the reference implementation folded version 4 into version 3, and
+this DIP follows that layout. A version 3 ProRegTx with a non-zero
+`sharesCount` is a **shared registration**. A version 3 ProRegTx with
+`sharesCount = 0` behaves exactly as specified in DIP-0026.
 
-Because version 4 has not been released, the additional fields below change the
-serialization of all version 4 ProRegTx payloads (a non-shared payload still
+Because version 3 has not been released, the additional fields below change the
+serialization of all version 3 ProRegTx payloads (a non-shared payload still
 serializes `sharesCount = 0`, an empty share list, and zeroed penalty fields).
 This DIP and DIP-0026 must therefore deploy in the same release.
 
@@ -154,7 +158,7 @@ Each share has the following structure:
 | rewardScript | Script | Variable | Reward payout script (P2PKH/P2SH). Zero length means "use refundScript". |
 | ownerKeyID | CKeyID | 20 | Immutable share owner key ID. |
 
-For shared registrations, the following fields are appended to the version 4
+For shared registrations, the following fields are appended to the version 3
 ProRegTx payload immediately after the `payouts` field defined in DIP-0026:
 
 | Field | Type | Size | Description |
@@ -173,7 +177,7 @@ affected transaction identifiers non-malleable by third parties.
 
 ### Registering a Shared Masternode
 
-A shared registration (version 4 ProRegTx, `sharesCount > 0`) is valid only if
+A shared registration (version 3 ProRegTx, `sharesCount > 0`) is valid only if
 all of the following hold, in addition to DIP-0003 rules not explicitly
 replaced here:
 
@@ -186,7 +190,7 @@ replaced here:
    equals the required collateral and whose `scriptPubKey` is exactly the
    template.
 4. The DIP-0026 `payouts` list is empty (owner rewards derive from the share
-   table) and the legacy `scriptPayout` is absent per version 4.
+   table) and the legacy `scriptPayout` is absent per version 3.
 5. `keyIdOwner` is all zeros. The share owner keys replace it.
 6. `sharesCount` is between 2 and 8 inclusive.
 7. Every share `amount` is at least 100 DASH, and the amounts sum exactly to
@@ -453,21 +457,22 @@ implementations must enforce, at both mempool acceptance and block connection:
    input; the masternode list is consulted only inside ProDisTx validation.
 2. **Creation check:** any transaction output whose script equals the template,
    outside the collateral slot of a valid shared registration, is invalid.
-3. Block-level validation evaluates ProDisTx against the deterministic
-   masternode list as of the previous block plus earlier transactions in the
-   same block (a masternode may be registered and dissolved within one block).
+3. A ProDisTx is validated against the deterministic masternode list as of
+   the previous block, in blocks exactly as in the mempool. Registering and
+   dissolving the same masternode within one block is invalid. Everything a
+   dissolution is validated against (refund scripts, amounts, registration
+   height) is immutable after registration, so this single validation context
+   is complete and block validation reuses the mempool path.
 4. Masternode removal for a shared masternode occurs only through a validated
    ProDisTx. Collateral-spend removal semantics for normal masternodes are
    unchanged (normal collateral never carries the template).
 5. A validated ProDisTx removes its masternode in the same collateral-spend
    phase of deterministic-list construction as an ordinary collateral spend —
-   that is, after all of the block's provider transactions (registrations and
-   updates) have been applied. The dissolution is validated at its position in
-   the transaction order (so it sees the masternode and any earlier same-block
-   registration), but the removal itself is deferred to that phase. A shared
-   masternode update (ProUpShareTx or ProUpSharedRegTx) and a dissolution of the
-   same masternode may therefore appear together in one block in either order:
-   the update always applies before the removal takes effect.
+   that is, after all of the block's provider transactions have been applied.
+   A shared masternode update (ProUpShareTx or ProUpSharedRegTx) and a
+   dissolution of the same masternode may therefore appear together in one
+   block in either order: the update always applies before the removal takes
+   effect.
 
 Mempool implementations should additionally evict pending ProUpShareTx and
 ProUpSharedRegTx transactions for a masternode when its ProDisTx confirms.
@@ -530,8 +535,8 @@ After activation:
 
 * All rules in this DIP apply.
 * Template outputs created before activation are permanently unspendable.
-* Existing masternodes (legacy and DIP-0026 version 4 non-shared) are
-  unaffected. Normal masternode collateral-spend semantics are unchanged.
+* Existing masternodes (legacy and version 3 non-shared) are unaffected.
+  Normal masternode collateral-spend semantics are unchanged.
 
 Shared registration is restricted to Regular masternodes in this version.
 Extending shared ownership to Evo masternodes requires a Platform-side
@@ -606,12 +611,13 @@ regime because the minimum-based rules degenerate cleanly to
 "each participant receives at least their share" when the required penalty is
 zero.
 
-### Why this extends provider transaction version 4
+### Why this extends provider transaction version 3
 
-DIP-0026's version 4 has not shipped, so folding shared collateral into the
-same version avoids an additional version solely for field layering, at the
-cost of a wire-format change to an unreleased payload version. The two DIPs
-deploy together in v24.
+Version 3 (extended addresses, which carries DIP-0026's payouts after the
+version 4 fold) has not shipped, so folding shared collateral into the same
+version avoids an additional version solely for field layering, at the cost of
+a wire-format change to an unreleased payload version. The two DIPs deploy
+together in v24.
 
 ### Bounds
 
@@ -653,7 +659,9 @@ Implementations should include tests for at least the following:
    non-empty `scriptSig` on the collateral input; wrong actor signature;
    signature count other than 1 or `sharesCount`; unanimous signatures out of
    share order.
-8. Registration and dissolution of the same masternode within one block.
+8. Invalid: registration and dissolution of the same masternode within one
+   block (a dissolution is valid only once its registration is contained in a
+   prior block).
 9. A pending dissolution remains valid across confirming ProUpShareTx and
    ProUpSharedRegTx transactions; a standby dissolution signed at registration
    broadcasts successfully after the early-period boundary.
