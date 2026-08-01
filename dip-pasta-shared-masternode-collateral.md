@@ -214,7 +214,7 @@ replaced here:
 ```text
 "DashSharedMNReg" || payload version ||
 tx version || tx type || tx nLockTime ||
-inputsHash || outputsHash ||
+inputsHash || all input sequences || outputsHash ||
 type || mode || netInfo and Platform fields ||
 keyIdVoting || pubKeyOperator || operatorReward ||
 shares || earlyPeriodBlocks || earlyPenalty
@@ -222,17 +222,21 @@ shares || earlyPeriodBlocks || earlyPenalty
 
 where `inputsHash` and `outputsHash` are as defined in DIP-0003, and `shares`
 is the serialized share table. Consent therefore binds every participant to the
-exact funding inputs, all outputs (including the collateral output and every
-change output), the full share table, the penalty terms, and the registrar
-configuration. Consent never relies on the sighash modes of funding-input
-signatures, because Dash transaction signatures permit `SIGHASH_NONE`,
-`SIGHASH_SINGLE`, and `SIGHASH_ANYONECANPAY`.
+exact funding inputs (prevouts and sequences), all outputs (including the
+collateral output and every change output), the full share table, the penalty
+terms, and the registrar configuration. Consent never relies on the sighash
+modes of funding-input signatures, because Dash transaction signatures permit
+`SIGHASH_NONE`, `SIGHASH_SINGLE`, and `SIGHASH_ANYONECANPAY`. Covering the
+input sequences matters: BIP68 gives them consensus meaning on version 2 and
+later transactions, so an uncovered sequence rewrite between consent signing
+and funding-input signing could impose a months-long relative timelock on a
+fully consented registration.
 
 Registration is atomic: if any funding input is double-spent or any participant
 withholds a `joinSig`, no shared masternode is created and no participant's
 funds move. Co-signer transaction-identifier malleability is harmless: nothing
 is pre-signed against the registration txid, and the consent digest binds to
-prevouts and outputs, which malleation cannot change.
+prevouts, sequences, and outputs, which malleation cannot change.
 
 ### Dissolving a Shared Masternode (ProDisTx)
 
