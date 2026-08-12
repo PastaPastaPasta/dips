@@ -58,20 +58,21 @@ Considerations section notes that "a share arrangement that requires immutable
 payout rights must use additional contractual, wallet, or protocol mechanisms
 outside the scope of this DIP." This DIP is that protocol mechanism.
 
-Without it, shared masternode ownership requires trusting a collateral holder:
-whoever controls the collateral key can spend the collateral, destroy the
-masternode, and abscond with the other participants' principal. Pre-signed
-multi-signature refund transactions cannot fix this on Dash: without SegWit or
-Taproot, a co-signer can malleate the funding transaction identifier and
-invalidate every pre-signed child. The only robust construction available is a
-consensus-enforced covenant: the protocol itself records each participant's
-contribution, refund script, reward script, and owner key, and enforces
-refunds, rewards, and update consent directly.
+Without it, a single collateral holder can spend the collateral, destroy the
+masternode, and take the other participants' principal. A P2SH multi-signature
+collateral can prevent unilateral theft, but it cannot guarantee unilateral
+exit. A dissolution signed before the funding transaction confirms is exposed
+to co-signer transaction-identifier malleability on Dash, while signing it
+after confirmation still depends on enough participants remaining available
+and cooperative. It also does not protect recurring payout rights. This DIP
+instead records each participant's contribution, refund script, reward script,
+and owner key in consensus and directly enforces refunds, rewards, and update
+consent.
 
 This DIP is therefore a strict superset of DIP-0026:
 
-* DIP-0026: protocol-enforced recurring reward split;
-* this DIP: protocol-enforced funding, reward split, update consent, and
+* DIP-0026: Protocol-enforced recurring reward split;
+* This DIP: Protocol-enforced funding, reward split, update consent, and
   trustless exit.
 
 ## Prior Work
@@ -94,19 +95,16 @@ This DIP is therefore a strict superset of DIP-0026:
 | Share owner key | The ECDSA key (as a key ID) that authorizes a participant's consensus actions. Immutable. |
 | Early period | The first `earlyPeriodBlocks` blocks after registration, during which unilateral exit is penalized. |
 | Dissolution | The consensus-enforced spend of shared collateral that refunds all participants and removes the masternode. |
+| ProDisTx | The special transaction defined by this DIP that performs a dissolution. |
 | Actor | The participant designated by `actorIndex` in a dissolution; pays the penalty (if any) and the transaction fee. |
 | Unilateral dissolution | A dissolution authorized by exactly one participant. |
 | Unanimous dissolution | A dissolution authorized by every participant. |
 
 ### Provider Transaction Version
 
-This DIP extends the version 3 (extended addresses) ProRegTx payload, which
-carries the DIP-0026 `payouts` field, prior to its release in any Dash Core
-version. DIP-0026's multi-party payouts were originally specified as a separate
-version 4 (`MultiPayout`); because both versions are introduced by the same
-deployment, the reference implementation folded version 4 into version 3, and
-this DIP follows that layout. A version 3 ProRegTx with a non-zero
-`sharesCount` is a **shared registration**. A version 3 ProRegTx with
+This DIP extends the unreleased version 3 (extended addresses) ProRegTx payload,
+which carries the DIP-0026 `payouts` field. A version 3 ProRegTx with a non-zero
+`sharesCount` is a shared registration. A version 3 ProRegTx with
 `sharesCount = 0` behaves exactly as specified in DIP-0026.
 
 Because version 3 has not been released, the additional fields below change the
@@ -117,25 +115,25 @@ This DIP and DIP-0026 must therefore deploy in the same release.
 ### Shared Collateral Script
 
 The collateral output of a shared registration must use exactly the following
-7-byte script (the **template**):
+7-byte script (the template):
 
 ```text
 0x04 "DSHC" OP_DROP OP_TRUE
 hex: 04445348437551
 ```
 
-Template matching is always **exact-script** comparison against these 7 bytes,
+Template matching is always exact-script comparison against these 7 bytes,
 never prefix matching.
 
 The template contains no keys and is spendable with an empty `scriptSig` at the
 script layer. All protection comes from the following consensus rules, active
 from deployment activation:
 
-* **Creation:** an output whose `scriptPubKey` equals the template is valid
+* Creation: An output whose `scriptPubKey` equals the template is valid
   only as the collateral output of a valid shared registration. Any other
   creation — in a normal transaction, a coinbase, another special transaction,
   or a non-collateral output of the registration itself — is invalid.
-* **Spending:** a transaction spending an output whose `scriptPubKey` equals
+* Spending: A transaction spending an output whose `scriptPubKey` equals
   the template is valid only if it is a valid ProDisTx whose referenced
   masternode owns that outpoint.
 
@@ -169,11 +167,14 @@ ProRegTx payload immediately after the `payouts` field defined in DIP-0026:
 | earlyPeriodBlocks | uint32_t | 4 | Length of the early period in blocks. |
 | earlyPenalty | int64_t | 8 | Penalty in duffs for unilateral dissolution during the early period. |
 
-All signatures introduced by this DIP (`joinSigs` and ProDisTx signatures) are
-65-byte compact recoverable ECDSA signatures with **enforced low-S** (the
-signature scheme used for owner-key payload signatures in DIP-0003). High-S
-signatures are invalid. This, combined with the digest rules below, makes the
-affected transaction identifiers non-malleable by third parties.
+These fields are serialized in the table order shown above.
+
+All signatures introduced by this DIP, including `joinSigs`, ProDisTx,
+ProUpShareTx, and ProUpSharedRegTx signatures, use the owner-key signature
+scheme from DIP-0003 and must be canonical. Compact signatures are 65-byte
+recoverable ECDSA signatures, and all signatures must use low-S form. High-S
+signatures are invalid. This, combined with the digest rules below, prevents
+third-party malleation of the affected transaction identifiers.
 
 ### Registering a Shared Masternode
 
@@ -201,9 +202,10 @@ replaced here:
    owner key registered by any other masternode (see
    [Masternode List State](#masternode-list-state)); duplicate `refundScript`s
    within the share table are invalid; duplicate `rewardScript`s are allowed.
-10. No `refundScript` or `rewardScript` pays P2PK or P2PKH to any share
-    `ownerKeyID` in the table or to `keyIdVoting` (extends the DIP-0026
-    payee-reuse rules), and none equals the template
+10. Every `refundScript` and non-empty `rewardScript` is P2PKH or P2SH. A P2PKH
+    destination must not equal any share `ownerKeyID` in the table or
+    `keyIdVoting` (extending the DIP-0026 payee-reuse rules), and no script may
+    equal the template
     (see [Forbidden Template Destinations](#forbidden-template-destinations)).
 11. The external-collateral `payloadSig` is empty, and each entry of `joinSigs`
     is a valid canonical signature by the corresponding share's `ownerKeyID`
@@ -229,8 +231,8 @@ modes of funding-input signatures, because Dash transaction signatures permit
 `SIGHASH_NONE`, `SIGHASH_SINGLE`, and `SIGHASH_ANYONECANPAY`. Covering the
 input sequences matters: BIP68 gives them consensus meaning on version 2 and
 later transactions, so an uncovered sequence rewrite between consent signing
-and funding-input signing could impose a months-long relative timelock on a
-fully consented registration.
+and funding-input signing could lock a fully consented registration for several
+months.
 
 Registration is atomic: if any funding input is double-spent or any participant
 withholds a `joinSig`, no shared masternode is created and no participant's
@@ -256,7 +258,7 @@ Payload:
 | sigCount | uint8_t | 1 | Number of signatures: exactly 1 (unilateral) or exactly `sharesCount` (unanimous). |
 | sigs | signature[sigCount] | 65 * sigCount | Canonical signatures over `SharedDisHash`. |
 
-There is no mode field: **the signature count defines the mode**. Exactly one
+There is no mode field: the signature count defines the mode. Exactly one
 signature — which must be by `shares[actorIndex].ownerKeyID` — is a unilateral
 dissolution. Exactly `sharesCount` signatures — one per share, in share order —
 is a unanimous dissolution. Any other count, order, or signer set is invalid.
@@ -298,11 +300,13 @@ non-increasing in `spendHeight`.
 
 #### Output rules
 
-All output rules are **minimum-based**: paying more penalty than required is
+All output rules are minimum-based: paying more penalty than required is
 always valid. Because `requiredPenalty` is non-increasing, a ProDisTx that is
 valid at height `h` is valid at every height `h' >= h`: no dissolution is
-silently invalidated by chain progress. The converse is intentionally not true:
-a unilateral ProDisTx paying no penalty is invalid until the early period ends.
+silently invalidated by chain progress. A unilateral ProDisTx is invalid
+whenever it pays less than `requiredPenalty`. A zero-penalty standby becomes
+valid when the required penalty reaches zero, or immediately when
+`earlyPenalty` is zero.
 
 Let `a = actorIndex`, `W` = the sum of non-actor share amounts, and
 `P = requiredPenalty`. A ProDisTx is valid only if:
@@ -315,6 +319,9 @@ Let `a = actorIndex`, `W` = the sum of non-actor share amounts, and
 3. For each non-actor output, with `bonus[i] = value[i] - shares[i].amount`:
    `bonus[i] >= floor(P * shares[i].amount / W)`.
 4. The sum of all `bonus[i]` is at least `P`.
+
+The multiplication in rule 3 must use an intermediate at least 128 bits wide;
+a signed 64-bit intermediate can overflow for valid amounts.
 
 Everything not paid to these outputs is the transaction fee, which by value
 conservation can only come from the actor's share; the actor output is
@@ -348,14 +355,13 @@ rejected until the first is mined or dropped.
 
 Because validity is monotone and share owner keys are immutable, a signed
 ProDisTx never goes stale. Wallets should have each participant sign a
-**standby dissolution** immediately after registration confirms — unilateral,
+standby dissolution immediately after registration confirms — unilateral,
 paying `earlyPenalty` (valid immediately and forever) or no penalty (valid from
 the end of the early period, forever) — and store it with the participant's
 refund-key backup, separately from the owner key. If the owner key is later
 lost, broadcasting the standby recovers the participant's principal without any
-other party's cooperation. A leaked standby is griefing-only: every output is
-covenant-fixed, so its holder can trigger the exit (costing the signer the
-penalty) but cannot redirect any value.
+other party's cooperation. A leaked standby can force an early exit, but every
+output is fixed by the covenant, so its holder cannot redirect any value.
 
 ### Updating a Share (ProUpShareTx)
 
@@ -373,7 +379,8 @@ Payload:
 | rewardScriptSize | compactSize uint | 1-9 | Size of the new reward script. |
 | rewardScript | Script | Variable | New reward script (P2PKH/P2SH), or zero length for "use refundScript". |
 | inputsHash | uint256 | 32 | Hash of all transaction inputs, as in DIP-0003 update payloads. |
-| payloadSig | signature | 65 | Canonical signature by `shares[shareIndex].ownerKeyID` over the payload hash (with this field empty). |
+| payloadSigSize | compactSize uint | 1-9 | Size of the signature. Must encode 65. |
+| payloadSig | unsigned char[] | Variable | Canonical signature by `shares[shareIndex].ownerKeyID` over the payload hash (with this field empty). |
 
 A ProUpShareTx updates exactly one share's `rewardScript` and nothing else.
 Share `amount`, `refundScript`, `ownerKeyID`, the participant count, the
@@ -401,7 +408,7 @@ Payload:
 | sigs | signature[sigCount] | 65 * sigCount | Canonical signatures over the payload hash (with this field empty), one per share, in share order. |
 
 A ProUpSharedRegTx updates the whole-masternode registrar fields and requires
-one valid signature from **every** current share owner key, in share order.
+one valid signature from every current share owner key, in share order.
 Operator-key change semantics (service reset) match ProUpRegTx in DIP-0003. A
 ProUpSharedRegTx referencing a non-shared masternode is invalid, and a plain
 ProUpRegTx referencing a shared masternode is invalid.
@@ -428,39 +435,48 @@ directions: a share `ownerKeyID` must not equal any other masternode's
 registered owner key (shared or `keyIdOwner`), and a normal registration must
 not reuse any active share owner key.
 
+Proof-of-Service rules are unchanged for shared masternodes. In particular, a
+valid ProUpServTx revives a banned shared masternode once its operator and
+voting keys are set; the intentionally null legacy `keyIdOwner` does not prevent
+revival.
+
 Share data is excluded from the simplified masternode list entry hash
 (`CSimplifiedMNListEntry`), matching DIP-0026's treatment of payout data.
-Extended JSON forms may expose shares for diagnostics; this is not a
-light-client commitment. Full nodes validate shared rewards and dissolutions
-from deterministic masternode state reconstructed from blocks.
+RPCs that expose full deterministic state, including `protx info`, should return
+the share table, `earlyPeriodBlocks`, and `earlyPenalty`. Extended simplified
+masternode list JSON should expose the share table so clients can observe share
+updates. None of these JSON fields is a light-client commitment. Full nodes
+validate shared rewards and dissolutions from deterministic masternode state
+reconstructed from blocks.
 
 ### Masternode Reward Payments
 
 Reward payment construction for a shared masternode follows the DIP-0026
 procedure exactly, with the owner payout entries derived from the share table:
 
-* the entry ordering is the share-table order;
-* the entry weight is the share `amount` (instead of basis points), so entry
+* The entry ordering is the share-table order;
+* The entry weight is the share `amount` (instead of basis points), so entry
   `i` (except the last) receives `floor(ownerReward * amount[i] / collateral)`
   and the last entry receives the remainder;
-* the entry destination is the share's `rewardScript` if non-empty, otherwise
+* The entry destination is the share's `rewardScript` if non-empty, otherwise
   its `refundScript`;
-* zero-amount outputs are omitted, and operator reward handling is unchanged.
+* Zero-amount outputs are omitted, and operator reward handling is unchanged.
 
 This reuses DIP-0026's single rounding convention (sequential floor, remainder
-to the last entry) rather than introducing a second one.
+to the last entry) rather than introducing a second one. Implementations must
+use an intermediate at least 128 bits wide for the amount multiplication.
 
 ### Collateral Spend Enforcement
 
 Template rules cannot live only inside provider-transaction checks. Consensus
 implementations must enforce, at both mempool acceptance and block connection:
 
-1. **Spend check:** for every transaction, if any input's previous output
-   script equals the template, the transaction must be a valid ProDisTx
-   spending that outpoint. This is a constant exact-script comparison per
-   input; the masternode list is consulted only inside ProDisTx validation.
-2. **Creation check:** any transaction output whose script equals the template,
-   outside the collateral slot of a valid shared registration, is invalid.
+1. For every transaction, if any input's previous output script equals the
+   template, the transaction must be a valid ProDisTx spending that outpoint.
+   This is a constant exact-script comparison per input; the masternode list is
+   consulted only inside ProDisTx validation.
+2. Any transaction output whose script equals the template, outside the
+   collateral slot of a valid shared registration, is invalid.
 3. A ProDisTx is validated against the deterministic masternode list as of
    the previous block, in blocks exactly as in the mempool. Registering and
    dissolving the same masternode within one block is invalid. Everything a
@@ -483,34 +499,36 @@ ProUpSharedRegTx transactions for a masternode when its ProDisTx confirms.
 
 ### Forbidden Template Destinations
 
-Because template outputs may only be created inside shared registrations, any
-consensus-mandated output paying the template would be unconstructable and
-could deadlock consensus. Validation must therefore reject the template script
-wherever a user-supplied script later becomes a consensus-mandated output:
+Because template outputs may only be created inside shared registrations, a
+consensus-mandated output paying the template would be impossible to construct
+and could deadlock consensus. Validation must therefore reject the template
+script wherever a user-supplied script later becomes a consensus-mandated
+output:
 
-* share `refundScript` and `rewardScript` values (registration and
+* Share `refundScript` and `rewardScript` values (registration and
   ProUpShareTx) — a template refund script would make every dissolution
   invalid, freezing the collateral forever;
-* every provider-transaction payout script for every masternode type and
+* Every provider-transaction payout script for every masternode type and
   payload version, including DIP-0026 payout entries and the operator payout
-  script — a template payout would make the coinbase unconstructable when that
-  masternode is paid;
-* governance proposal and trigger payment scripts (validated after
+  script — a template payout would make the coinbase impossible to construct
+  when that masternode is paid;
+* Governance proposal and trigger payment scripts (validated after
   activation) — a template payee would invalidate the superblock carrying it;
-* asset-unlock (credit withdrawal) destinations — a template destination would
+* Asset-unlock (credit withdrawal) destinations — a template destination would
   make the withdrawal transaction invalid.
 
 ### Special Transaction Filtering
 
-A shared **registration** carries the full share table, so special transaction
+A shared registration carries the full share table, so special transaction
 filters and bloom filters must match it on every share `refundScript`,
 `rewardScript`, and `ownerKeyID`, in the same manner that DIP-0026 requires for
 payout scripts.
 
 The lifecycle transactions do not carry the share table — only the `proTxHash`
 identifying the masternode — so, consistent with the DIP-0003 treatment of
-ProUpRegTx and ProUpRevTx, they are matched by `proTxHash` (plus the new
-`rewardScript` for ProUpShareTx). A light client learns a masternode's share
+ProUpRegTx and ProUpRevTx, they are matched by `proTxHash`. ProUpShareTx is also
+matched by its new `rewardScript`, and ProUpSharedRegTx by its new
+`keyIdVoting`. A light client learns a masternode's share
 scripts and owner keys from the registration it matched, then follows that
 masternode's lifecycle by its `proTxHash`. Two properties make this sufficient
 in practice: the refund and reward payments produced by a ProDisTx are ordinary
@@ -528,6 +546,8 @@ keys and filter construction performs no masternode-list lookup.
 
 This DIP deploys with Dash Core's v24 network upgrade (`DEPLOYMENT_V24`,
 an Enhanced Hard Fork per [DIP-0023](dip-0023.md)), together with DIP-0026.
+Contextual validation must recognize special transaction types 10 through 12
+so they reach their type-specific checks; those checks enforce the v24 gate.
 
 Before activation:
 
@@ -552,12 +572,14 @@ would reintroduce the trust this DIP removes.
 
 ### Why a consensus covenant instead of multi-signature scripts
 
-Dash lacks SegWit and Taproot, so transaction identifiers are malleable by
-co-signers and pre-signed refund transactions are unsafe. A P2SH multi-sig
-collateral script would additionally freeze funds if signers disappear and
-cannot express per-participant refund amounts. Recording ownership in the
-provider payload and enforcing spends in consensus — the same trust model as
-DIP-0003's deterministic masternode lists — avoids both problems. The price is
+P2SH multi-signature collateral can prevent unilateral theft, but its threshold
+also makes exit depend on continued signer cooperation. A pre-signed
+dissolution can encode the refund amounts, but signing it before funding
+confirmation is unsafe on Dash because a co-signer can change the funding
+transaction identifier; signing after confirmation preserves the cooperation
+requirement. Recording ownership and refund amounts in the provider payload and
+enforcing spends in consensus — the same trust model as DIP-0003's deterministic
+masternode lists — provides each participant an independent exit. The price is
 that the collateral output is anyone-can-spend at the script layer on any chain
 that does not enforce these rules; see
 [Security Considerations](#security-considerations).
@@ -598,7 +620,7 @@ sign years in advance.
 
 Redistribution compensates remaining participants for losing their node and
 payment-queue position. Burning would punish the innocent majority to deny a
-hypothetical griefer a small bonus. A penalty waiver triggered by sustained
+malicious participant a small bonus. A penalty waiver triggered by sustained
 PoSe ban was considered and rejected: the operator controls PoSe status, and in
 practice a participant is often the operator, so a waiver lets a participant
 deliberately get the node banned and exit penalty-free during the early period,
@@ -617,11 +639,10 @@ zero.
 
 ### Why this extends provider transaction version 3
 
-Version 3 (extended addresses, which carries DIP-0026's payouts after the
-version 4 fold) has not shipped, so folding shared collateral into the same
-version avoids an additional version solely for field layering, at the cost of
-a wire-format change to an unreleased payload version. The two DIPs deploy
-together in v24.
+Version 3 (extended addresses, which carries DIP-0026's payouts) has not shipped,
+so using the same version avoids an additional payload version solely for field
+layering, at the cost of a wire-format change to an unreleased payload. The two
+DIPs deploy together in v24.
 
 ### Bounds
 
@@ -636,7 +657,9 @@ own fee.
 
 Implementations should include tests for at least the following:
 
-1. A valid shared registration with 2 and with 8 participants.
+1. A valid shared registration with 2 and with 8 participants; exact
+   serialization round-trips for shared payloads and for a non-shared version 3
+   payload with an empty share table and zeroed penalty fields.
 2. Invalid: shared Evo registration; external shared collateral; share sum not
    equal to the collateral; share below 100 DASH; `earlyPenalty >= min(share)`;
    early period above the cap; non-empty DIP-0026 `payouts` with shares;
@@ -645,8 +668,9 @@ Implementations should include tests for at least the following:
    (both directions with normal masternodes); duplicate refund scripts;
    refund or reward script paying P2PKH to any share owner key or the voting
    key; refund or reward script equal to the template.
-4. Invalid: missing or non-canonical (high-S) `joinSig`; consent digest
-   mismatch after changing any covered field.
+4. Invalid: missing or non-canonical (high-S) signature in each signature-bearing
+   payload introduced by this DIP; consent digest mismatch after changing any
+   covered field.
 5. Invalid: any normal transaction spending a template output; post-activation
    template-output creation in a normal transaction, a coinbase, or a
    non-collateral output of a shared registration. A near-miss script (template
@@ -675,16 +699,20 @@ Implementations should include tests for at least the following:
     share order; plain ProUpRegTx is invalid for a shared masternode.
 11. Reward split across mined blocks: conservation, remainder to the last
     entry, zero-output omission, operator reward interaction, reward script
-    fallback to refund script.
+    fallback to refund script, and amounts large enough to overflow a 64-bit
+    multiplication.
 12. Reorg across registration, across the early-period boundary, and across
     update-then-dissolution ordering; restart from a deterministic masternode
     list snapshot before and after shared state changes.
-13. Filter matching for every share refund script, reward script, and owner
-    key.
+13. Filter matching for every share refund script, reward script, and owner key;
+    the new reward script in ProUpShareTx; and the new voting key in
+    ProUpSharedRegTx.
+14. Proof-of-Service ban and revival of a shared masternode, including revival
+    with a null legacy `keyIdOwner`.
 
 ## Security Considerations
 
-**Non-enforcing chains.** The template is anyone-can-spend at the script layer.
+Non-enforcing chains. The template is anyone-can-spend at the script layer.
 On any chain that does not enforce this DIP — non-upgraded software, a chain
 split, a hypothetical future consensus regression — shared collateral outputs
 are freely spendable. The protection is the hard fork itself: theft can only
@@ -692,20 +720,22 @@ are freely spendable. The protection is the hard fork itself: theft can only
 trade-off is inherent to consensus covenants on a chain without script-level
 covenant support and must be accepted with eyes open.
 
-**Key separation.** The share owner key is control plane, never a fund
+Key separation. The share owner key is control plane, never a fund
 destination. The central guarantee — owner-key compromise cannot steal
 principal — holds only because the refund destination is independent of the
 owner key: a thief who dissolves as the victim still pays the principal to a
 script they cannot spend. This is why refund and reward scripts must not pay to
-share owner keys, and why wallets must not derive refund destinations from
-owner keys even in forms consensus cannot detect (such as inside P2SH).
+share owner keys. Consensus can enforce this separation for direct P2PKH
+destinations, but cannot inspect the spending conditions behind P2SH. Wallets
+must keep the owner key independent from the keys controlling either kind of
+destination.
 
-**Key compromise.** A stolen share owner key allows redirecting that share's
+Key compromise. A stolen share owner key allows redirecting that share's
 future rewards and triggering a penalized unilateral dissolution — never
 principal theft. Because keys cannot be rotated, victim and thief hold
 identical capabilities; the honest holder always retains the exit right.
 
-**Key loss.** Principal is never endangered: any other participant's unilateral
+Key loss. Principal is never endangered: any other participant's unilateral
 dissolution refunds the key-less participant in full, and outside the early
 period this costs the rescuer only the transaction fee. A key-less participant
 cannot force exit, one lost key permanently disables the unanimous and
@@ -713,44 +743,43 @@ whole-masternode update paths, and losing all owner keys freezes the collateral
 forever. Standby dissolutions (see above) reduce all of these to "keep your
 standby with your refund-key backup".
 
-**Hostage and griefing dynamics.** A participant who refuses to sign
-whole-masternode updates can degrade the node (for example, blocking operator
-key replacement), and an honest leaver both pays the early penalty and pays a
-pro-rata slice of it to the obstructive participant. This is bounded: the
+Obstruction and forced exits. A participant who refuses to sign whole-masternode
+updates can degrade the node (for example, by blocking operator-key
+replacement), and an honest leaver both pays the early penalty and distributes
+a pro-rata portion of it to the obstructive participant. This is bounded: the
 initially configured operator key keeps working indefinitely, exit after the
 early period is penalty-free, and the early penalty is a term every participant
-consented to at formation. Wallets must present penalty terms prominently, and
-must warn that a zero `earlyPenalty` permits cheap early griefing.
+consented to at formation. Wallets must present penalty terms prominently and
+warn that a zero `earlyPenalty` makes it inexpensive to force an early exit.
 
-**Transaction-identifier malleability.** The covenant input's empty-`scriptSig`
+Transaction-identifier malleability. The covenant input's empty-`scriptSig`
 rule and the low-S requirement on all payload signatures pin every free byte of
 a ProDisTx; inputs, sequences, outputs, and lock time are covered by the signed
 digest. Without these rules, third parties could mutate a pending dissolution's
 txid, breaking child-pays-for-parent fee bumps.
 
-**Forbidden destinations.** The list in
+Forbidden destinations. The list in
 [Forbidden Template Destinations](#forbidden-template-destinations) is
 consensus-critical: missing any entry creates either permanently frozen
-collateral or an unconstructable coinbase (a consensus deadlock) via a crafted
-script.
+collateral or a coinbase that is impossible to construct (a consensus deadlock)
+via a crafted script.
 
 ## Privacy Considerations
 
 Shared ownership is consensus-visible by construction:
 
-* the share table — amounts, owner key IDs, refund scripts, reward scripts, and
+* The share table — amounts, owner key IDs, refund scripts, reward scripts, and
   penalty terms — is public on-chain forever;
-* every payout block creates up to 8 owner outputs that persistently cluster
+* Every payout block creates up to 8 owner outputs that persistently cluster
   the co-owners' scripts with each other and with the masternode;
-* the immutable refund script is an address pre-commitment made years before
+* The immutable refund script is an address pre-commitment made years before
   the exit that eventually pays it.
 
 Wallets should use fresh keys and destinations for every formation, never reuse
 a refund destination across formations or with other on-chain activity, and may
-rotate reward scripts freely. Participants who want unlinkability between their
-share and their other funds must break the link before funding (for example,
-by mixing the funding inputs); note that refunds return as large,
-non-denominated outputs.
+rotate reward scripts freely. Participants who do not want their share linked to
+other funds must break the link before funding (for example, by mixing the
+funding inputs); note that refunds return as large, non-denominated outputs.
 
 ## Copyright
 

@@ -113,8 +113,6 @@ topups
 tprv
 tpub
 unretrievable
-unconstructable
-unlinkability
 trustlessly
 UTXO
 varint
