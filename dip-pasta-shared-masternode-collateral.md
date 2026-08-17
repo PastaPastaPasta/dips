@@ -527,6 +527,12 @@ implementations must enforce, at both mempool acceptance and block connection:
    block in either order: the update always applies before the removal takes
    effect.
 
+Within a block, provider transactions are validated and applied sequentially
+against the evolving list: a ProUpShareTx or ProUpSharedRegTx may follow its
+masternode's registration in the same block. Because removal takes effect only
+in the collateral-spend phase, share owner keys freed by a ProDisTx become
+reusable by a new registration only from the following block.
+
 Mempool implementations should additionally evict pending ProUpShareTx and
 ProUpSharedRegTx transactions for a masternode when its ProDisTx confirms.
 
@@ -741,7 +747,9 @@ Implementations should include tests for at least the following:
    share order.
 8. Invalid: registration and dissolution of the same masternode within one
    block (a dissolution is valid only once its registration is contained in a
-   prior block).
+   prior block); a registration reusing a share owner key freed by a ProDisTx
+   in the same block. Valid: a registration followed by a share update of the
+   same masternode within one block.
 9. A pending dissolution remains valid across confirming ProUpShareTx and
    ProUpSharedRegTx transactions; a standby dissolution signed at registration
    broadcasts successfully after the early-period boundary.
