@@ -704,10 +704,10 @@ zero.
 
 ### Why this extends provider transaction version 3
 
-Version 3 (extended addresses, which carries DIP-0026's payouts) has not shipped,
-so using the same version avoids an additional payload version solely for field
-layering, at the cost of a wire-format change to an unreleased payload. The two
-DIPs deploy together in v24.
+Folding shared collateral into version 3 (extended addresses, which carries
+DIP-0026's payouts) avoids an additional payload version solely for field
+layering. The two DIPs deploy together in v24, so every version 3 payload
+carries both field sets.
 
 ### Bounds
 
