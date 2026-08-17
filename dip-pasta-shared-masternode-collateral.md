@@ -295,6 +295,16 @@ commits to `sigCount`, which selects the mode, so the unilateral/unanimous
 distinction cannot be malleated after signing. The tag is serialized as a
 compactSize-length-prefixed string, like `SharedRegConsentHash`'s.
 
+The digest commits `nLockTime` and the input sequence, but consensus does not
+otherwise restrict them, and special transactions use transaction version 3,
+so BIP68 relative lock-time semantics apply to the collateral input's
+sequence. Participants who want a time-locked dissolution may use one; the
+monotone validity described below then holds from the first height at which
+the transaction is also final. Wallets must verify `nLockTime` and the input
+sequence before signing — in particular when co-signing a unanimous
+dissolution built by another participant, and when signing a standby
+dissolution intended to be broadcastable immediately.
+
 #### Required penalty
 
 ```text
