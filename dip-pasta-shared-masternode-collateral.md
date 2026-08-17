@@ -102,15 +102,15 @@ This DIP is therefore a strict superset of DIP-0026:
 
 ### Provider Transaction Version
 
-This DIP extends the unreleased version 3 (extended addresses) ProRegTx payload,
-which carries the DIP-0026 `payouts` field. A version 3 ProRegTx with a non-zero
+This DIP extends the version 3 (extended addresses) ProRegTx payload, which
+carries the DIP-0026 `payouts` field. A version 3 ProRegTx with a non-zero
 `sharesCount` is a shared registration. A version 3 ProRegTx with
-`sharesCount = 0` behaves exactly as specified in DIP-0026.
-
-Because version 3 has not been released, the additional fields below change the
-serialization of all version 3 ProRegTx payloads (a non-shared payload still
-serializes `sharesCount = 0`, an empty share list, and zeroed penalty fields).
-This DIP and DIP-0026 must therefore deploy in the same release.
+`sharesCount = 0` behaves exactly as specified in DIP-0026; it must serialize
+no shares, no `joinSigs`, `earlyPeriodBlocks = 0`, and `earlyPenalty = 0`, and
+a non-zero value in any of these fields is invalid. The fields below are part
+of the serialization of every version 3 ProRegTx payload, so this DIP and
+DIP-0026 deploy together in the same release (see
+[Deployment and Compatibility](#deployment-and-compatibility)).
 
 ### Shared Collateral Script
 
@@ -706,7 +706,8 @@ Implementations should include tests for at least the following:
 2. Invalid: shared Evo registration; external shared collateral; share sum not
    equal to the collateral; share below 100 DASH; `earlyPenalty >= min(share)`;
    early period above the cap; non-empty DIP-0026 `payouts` with shares;
-   non-zero `keyIdOwner`.
+   non-zero `keyIdOwner`; a non-shared version 3 payload with non-zero
+   `joinSigs`, `earlyPeriodBlocks`, or `earlyPenalty`.
 3. Invalid: duplicate share owner key within the table or across masternodes
    (both directions with normal masternodes); duplicate refund scripts;
    refund or reward script paying P2PKH to any share owner key or the voting
