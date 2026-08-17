@@ -217,13 +217,21 @@ replaced here:
 "DashSharedMNReg" || payload version ||
 tx version || tx type || tx nLockTime ||
 inputsHash || all input sequences || outputsHash ||
-type || mode || netInfo and Platform fields ||
+type || mode || netInfo ||
 keyIdVoting || pubKeyOperator || operatorReward ||
 shares || earlyPeriodBlocks || earlyPenalty
 ```
 
 where `inputsHash` and `outputsHash` are as defined in DIP-0003, and `shares`
-is the serialized share table. Consent therefore binds every participant to the
+is the share table exactly as serialized in the payload, including the leading
+`sharesCount` byte. Every field uses its payload or transaction serialization,
+and the leading tag is serialized as a compactSize-length-prefixed string, not
+as bare bytes. Shared registrations are type 0, so no Platform payload fields
+exist to hash. `collateralOutpoint` is deliberately absent: only one output of
+the transaction may carry the template (see
+[Collateral Spend Enforcement](#collateral-spend-enforcement)), so
+`outputsHash` already fixes the collateral slot. Consent binds every
+participant to the
 exact funding inputs (prevouts and sequences), all outputs (including the
 collateral output and every change output), the full share table, the penalty
 terms, and the registrar configuration. Consent never relies on the sighash
@@ -284,7 +292,8 @@ proTxHash || actorIndex || sigCount
 The digest commits to the transaction's actual input and outputs directly; the
 payload deliberately carries no `inputsHash`/`outputsHash` copies. It also
 commits to `sigCount`, which selects the mode, so the unilateral/unanimous
-distinction cannot be malleated after signing.
+distinction cannot be malleated after signing. The tag is serialized as a
+compactSize-length-prefixed string, like `SharedRegConsentHash`'s.
 
 #### Required penalty
 
@@ -399,7 +408,9 @@ Share `amount`, `refundScript`, `ownerKeyID`, the participant count, the
 penalty, and the early period are immutable for the life of the masternode. The
 new reward script is subject to the same script-type, payee-reuse, and template
 restrictions as at registration. A ProUpShareTx referencing a non-shared
-masternode is invalid.
+masternode is invalid. The payload hash is the double-SHA256 of the payload
+serialized with the signature fields (`payloadSigSize` and `payloadSig`)
+omitted entirely, following the DIP-0003 convention for update payloads.
 
 ### Updating the Shared Registrar (ProUpSharedRegTx)
 
@@ -423,7 +434,11 @@ A ProUpSharedRegTx updates the whole-masternode registrar fields and requires
 one valid signature from every current share owner key, in share order.
 Operator-key change semantics (service reset) match ProUpRegTx in DIP-0003. A
 ProUpSharedRegTx referencing a non-shared masternode is invalid, and a plain
-ProUpRegTx referencing a shared masternode is invalid.
+ProUpRegTx referencing a shared masternode is invalid. The payload hash each
+owner signs is the double-SHA256 of the payload serialized with `sigCount` and
+`sigs` omitted entirely, following the same DIP-0003 convention. Unlike
+ProDisTx, `sigCount` is not committed into the digest; it needs no commitment
+because it must equal the immutable `sharesCount`.
 
 The operator reward is fixed at registration and is not updatable, matching the
 DIP-0003 ProUpRegTx model (where `operatorReward` is likewise immutable after
