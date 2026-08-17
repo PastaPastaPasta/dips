@@ -440,6 +440,12 @@ owner signs is the double-SHA256 of the payload serialized with `sigCount` and
 ProDisTx, `sigCount` is not committed into the digest; it needs no commitment
 because it must equal the immutable `sharesCount`.
 
+The new `keyIdVoting` is subject to the registration payee-reuse rule in
+reverse: its P2PKH form must not equal any share's `refundScript` or effective
+reward script (the reward script in use, falling back to the refund script
+when empty). Without this check, a registrar update could silently re-create
+the payee collision that registration rule 10 forbids.
+
 The operator reward is fixed at registration and is not updatable, matching the
 DIP-0003 ProUpRegTx model (where `operatorReward` is likewise immutable after
 registration); it is therefore not carried in this payload.
@@ -742,7 +748,9 @@ Implementations should include tests for at least the following:
 10. ProUpShareTx updates exactly one reward script with the correct single
     signature; invalid for wrong signer, non-shared masternode, or any attempt
     to alter immutable fields. ProUpSharedRegTx requires all signatures in
-    share order; plain ProUpRegTx is invalid for a shared masternode.
+    share order; plain ProUpRegTx is invalid for a shared masternode; a
+    ProUpSharedRegTx whose new voting key is paid by any share's refund or
+    effective reward script is invalid.
 11. Reward split across mined blocks: conservation, remainder to the last
     entry, zero-output omission, operator reward interaction, reward script
     fallback to refund script, and amounts large enough to overflow a 64-bit
