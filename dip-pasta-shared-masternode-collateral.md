@@ -300,10 +300,12 @@ non-increasing in `spendHeight`.
 
 #### Output rules
 
-All output rules are minimum-based: paying more penalty than required is
-always valid. Because `requiredPenalty` is non-increasing, a ProDisTx that is
-valid at height `h` is valid at every height `h' >= h`: no dissolution is
-silently invalidated by chain progress. A unilateral ProDisTx is invalid
+All output rules are minimum-based, with two fixed ceilings: paying more
+penalty than required is valid up to the configured `earlyPenalty`, and the
+transaction fee is capped. Because `requiredPenalty` is non-increasing and
+both ceilings are height-independent, a ProDisTx that is valid at height `h`
+is valid at every height `h' >= h`: no dissolution is silently invalidated by
+chain progress. A unilateral ProDisTx is invalid
 whenever it pays less than `requiredPenalty`. A zero-penalty standby becomes
 valid when the required penalty reaches zero, or immediately when
 `earlyPenalty` is zero.
@@ -319,13 +321,22 @@ Let `a = actorIndex`, `W` = the sum of non-actor share amounts, and
 3. For each non-actor output, with `bonus[i] = value[i] - shares[i].amount`:
    `bonus[i] >= floor(P * shares[i].amount / W)`.
 4. The sum of all `bonus[i]` is at least `P`.
+5. The transaction fee — the collateral value minus the sum of all outputs —
+   is at most `MAX_DIS_FEE` = 1000000 duffs (0.01 DASH).
+6. In a unilateral dissolution, the sum of all `bonus[i]` is at most
+   `earlyPenalty`.
 
 The multiplication in rule 3 must use an intermediate at least 128 bits wide;
 a signed 64-bit intermediate can overflow for valid amounts.
 
 Everything not paid to these outputs is the transaction fee, which by value
-conservation can only come from the actor's share; the actor output is
-therefore implicitly capped at `shares[a].amount - P`.
+conservation can only come from the actor's share. Rules 5 and 6 cap the two
+paths by which value can leave the actor's share beyond the required penalty —
+fees and voluntary penalty overpayment — so a unilateral dissolution pays the
+actor output at least `shares[a].amount - earlyPenalty - MAX_DIS_FEE`. Rule 6
+does not constrain unanimous dissolutions: every share owner has signed the
+exact outputs, so the participants may jointly distribute any bonuses that
+respect the per-share minimums, subject only to the fee cap.
 
 The per-recipient minimum in rule 3 uses a plain floor with no remainder
 assignment: floors are element-wise monotone in `P`, whereas any remainder
@@ -348,7 +359,8 @@ Dash relay supports neither BIP125 replacement nor package relay, so a ProDisTx
 must embed a sufficient fee at signing time; child-pays-for-parent on the actor
 output can only raise the mining priority of a ProDisTx that already meets the
 minimum relay fee. A flat fee of roughly 100000 duffs — about one millionth of
-the minimum share — provides large fee-market headroom. Because Dash relay has
+the minimum share, and a tenth of the consensus fee ceiling `MAX_DIS_FEE` —
+provides large fee-market headroom. Because Dash relay has
 no replacement mechanism, the first ProDisTx to reach the mempool for a given
 collateral wins; a competing ProDisTx conflicts on the collateral input and is
 rejected until the first is mined or dropped.
@@ -616,6 +628,22 @@ with a non-increasing required penalty make validity monotone: once valid,
 always valid. This property is also what makes standby dissolutions safe to
 sign years in advance.
 
+### Why unilateral fees and penalty overpayment are capped
+
+The output minimums alone leave two unbounded paths by which value could leave
+the actor's share: the transaction fee and voluntary penalty overpayment.
+Without ceilings, one stolen share owner key could sign a unilateral
+dissolution that pays the victim's entire share to miners as fee, or as
+"bonus" concentrated on a colluding participant — principal theft through the
+very transaction meant to make it impossible. The fee ceiling is a fixed
+constant, and the bonus ceiling is the configured `earlyPenalty` rather than
+the height-dependent `requiredPenalty`: both ceilings are stable while the
+required minimum only loosens with height, preserving monotone validity, so an
+early-period standby paying the full `earlyPenalty` remains valid forever.
+With the ceilings, key compromise costs the actor at most
+`earlyPenalty + MAX_DIS_FEE` — the forced exit the penalty terms already
+price, plus a small constant.
+
 ### Why the penalty is redistributed rather than burned or waived
 
 Redistribution compensates remaining participants for losing their node and
@@ -679,10 +707,12 @@ Implementations should include tests for at least the following:
 6. Valid: unilateral dissolution during the early period paying `earlyPenalty`;
    unilateral dissolution after the early period paying no penalty; a
    dissolution signed during the early period confirming after the boundary
-   (monotonicity); overpaying the penalty; unanimous dissolution paying no
-   penalty at any height.
+   (monotonicity); overpaying the penalty up to `earlyPenalty`; unanimous
+   dissolution paying no penalty at any height; unanimous dissolution paying
+   bonuses above `earlyPenalty`.
 7. Invalid: unilateral dissolution paying no penalty inside the early period;
    any per-recipient floor violation; bonus sum below the required penalty;
+   a unilateral bonus sum above `earlyPenalty`; a fee above `MAX_DIS_FEE`;
    redirected or reordered refund outputs; extra outputs; extra inputs;
    non-empty `scriptSig` on the collateral input; wrong actor signature;
    signature count other than 1 or `sharesCount`; unanimous signatures out of
@@ -732,7 +762,9 @@ destination.
 
 Key compromise. A stolen share owner key allows redirecting that share's
 future rewards and triggering a penalized unilateral dissolution — never
-principal theft. Because keys cannot be rotated, victim and thief hold
+uncapped principal theft. The dissolution fee and bonus ceilings bound the
+loss at `earlyPenalty + MAX_DIS_FEE`; every other duff must reach the actor's
+immutable refund script. Because keys cannot be rotated, victim and thief hold
 identical capabilities; the honest holder always retains the exit right.
 
 Key loss. Principal is never endangered: any other participant's unilateral
