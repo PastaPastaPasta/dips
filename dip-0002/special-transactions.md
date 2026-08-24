@@ -4,8 +4,8 @@ The transaction type is described based on proposed DIPs.
 Here is a table of current proposed types and their associated DIP. Future DIPs
 may introduce more types.
 
-*Note:* This table refers to the _payload_ version which relates only to the special transaction
-payload and is distinct from the _transaction_ version.
+*Note:* This table refers to the *payload* version which relates only to the special transaction
+payload and is distinct from the *transaction* version.
 
 | Type | Transaction Type | DIP Number and Name | Payload Version | State |
 | ---- | ---------------- | ------------------- | --------------- | ----- |
@@ -17,4 +17,4 @@ payload and is distinct from the _transaction_ version.
 | 6 | Quorum Commitment | [DIP 006: Long Living Masternode Quorums](https://github.com/dashpay/dips/blob/master/dip-0006.md) | 1 | Active |
 | 7 | Masternode Hard Fork Signal | [DIP 023: Enhanced Hard Fork Mechanism](https://github.com/dashpay/dips/blob/master/dip-0023.md) | 1 | Active |
 | 8 | Asset Lock | [DIP 027: Dash Core Credit Pool](https://github.com/dashpay/dips/blob/master/dip-0027.md) | 1 | Active |
-| 9 | Asset Unlock | [DIP 027: Dash Core Credit Pool](https://github.com/dashpay/dips/blob/master/dip-0027.md) | 1 | Active |
+| 9 | Asset Unlock | [DIP 027: Dash Core Credit Pool](https://github.com/dashpay/dips/blob/master/dip-0027.md) | 2 | Active |
