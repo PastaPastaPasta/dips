@@ -1,8 +1,8 @@
 #!/usr/bin/python3
-# # Example showing how to create the withdrawal transaction identifier for a
-# # version 2 Asset Unlock transaction. The identifier is the double-SHA256 of
-# # the transaction serialized with the signHeight, quorumHash, and quorumSig
-# # fields set to zeros.
+# # Example showing how to compute the transaction hash (txid) of a version 2
+# # Asset Unlock transaction. The txid is the double-SHA256 of the transaction
+# # serialized with the signHeight, quorumHash, and quorumSig fields set to
+# # zeros, so every re-signed instance of one withdrawal shares one txid.
 import hashlib
 import struct
 
