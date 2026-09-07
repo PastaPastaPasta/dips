@@ -520,12 +520,13 @@ implementations must enforce, at both mempool acceptance and block connection:
    consulted only inside ProDisTx validation.
 2. Any transaction output whose script equals the template, outside the
    collateral slot of a valid shared registration, is invalid.
-3. A ProDisTx is validated against the deterministic masternode list as of
-   the previous block, in blocks exactly as in the mempool. Registering and
-   dissolving the same masternode within one block is invalid. Everything a
-   dissolution is validated against (refund scripts, amounts, registration
-   height) is immutable after registration, so this single validation context
-   is complete and block validation reuses the mempool path.
+3. ProDisTx, ProUpShareTx, and ProUpSharedRegTx are validated against the
+   deterministic masternode list as of the previous block (the current chain
+   tip for mempool acceptance). The referenced shared masternode must exist
+   in that list. Registering and then updating or dissolving the same
+   masternode within one block is invalid. A registration confirmed in block
+   H first becomes eligible for these transactions in block H+1, subject to
+   all other validity requirements.
 4. Masternode removal for a shared masternode occurs only through a validated
    ProDisTx. Collateral-spend removal semantics for normal masternodes are
    unchanged (normal collateral never carries the template).
@@ -534,14 +535,15 @@ implementations must enforce, at both mempool acceptance and block connection:
    that is, after all of the block's provider transactions have been applied.
    A shared masternode update (ProUpShareTx or ProUpSharedRegTx) and a
    dissolution of the same masternode may therefore appear together in one
-   block in either order: the update always applies before the removal takes
-   effect.
+   block in either order, provided the masternode exists in the previous
+   block's list: the update always applies before the removal takes effect.
 
-Within a block, provider transactions are validated and applied sequentially
-against the evolving list: a ProUpShareTx or ProUpSharedRegTx may follow its
-masternode's registration in the same block. Because removal takes effect only
-in the collateral-spend phase, share owner keys freed by a ProDisTx become
-reusable by a new registration only from the following block.
+Within a block, provider transactions are applied sequentially to the evolving
+list, with additional checks to preserve operator-key uniqueness and
+voting-key/payee separation after earlier updates. This does not replace the
+prior-block validation requirement. Because removal takes effect only in the
+collateral-spend phase, share owner keys freed by a ProDisTx become reusable
+by a new registration only from the following block.
 
 Mempool implementations should additionally evict pending ProUpShareTx and
 ProUpSharedRegTx transactions for a masternode when its ProDisTx confirms.
@@ -656,6 +658,22 @@ followed by re-registration. Immutability also makes dissolution validity
 unconditional: no confirmed transaction can stale a pending ProDisTx's
 signatures.
 
+### Why updates and dissolution require prior-block registration
+
+Requiring prior-block registration keeps block and mempool validation on the
+same confirmed-state path. Allowing a dissolution to follow registration in
+the same block would require a separate validation path against the evolving
+list, including dissolution signature checks during list construction. The
+prior-block rule avoids that extra path and duplicate signature checks.
+
+All registered state needed to validate a dissolution — share owner keys,
+refund scripts, amounts, penalty terms, and registration height — is immutable.
+Updates therefore cannot invalidate a dissolution's authorization or refund
+obligations, and no second validation against the evolving list is needed for
+ProDisTx. Shared updates follow the same prior-block registration requirement
+as other provider updates, while retaining the evolving-list checks needed
+for mutable fields.
+
 ### Why dissolution outputs are minimum-based
 
 Exact-amount output rules would make a unilateral ProDisTx signed near the
@@ -755,11 +773,13 @@ Implementations should include tests for at least the following:
    non-empty `scriptSig` on the collateral input; wrong actor signature;
    signature count other than 1 or `sharesCount`; unanimous signatures out of
    share order.
-8. Invalid: registration and dissolution of the same masternode within one
-   block (a dissolution is valid only once its registration is contained in a
-   prior block); a registration reusing a share owner key freed by a ProDisTx
-   in the same block. Valid: a registration followed by a share update of the
-   same masternode within one block.
+8. Invalid: registration followed by ProDisTx, ProUpShareTx, or
+   ProUpSharedRegTx for the same masternode within one block; a registration
+   reusing a share owner key freed by a ProDisTx in the same block. Valid:
+   each of those three transaction types in the block after registration,
+   subject to all other validity requirements; an update and dissolution of
+   an already registered masternode in one block, in either order; reuse of
+   a freed share owner key in the block after dissolution.
 9. A pending dissolution remains valid across confirming ProUpShareTx and
    ProUpSharedRegTx transactions; a standby dissolution signed at registration
    broadcasts successfully after the early-period boundary.
