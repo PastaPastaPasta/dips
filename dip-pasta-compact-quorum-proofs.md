@@ -15,534 +15,310 @@
 1. [Abstract](#abstract)
 1. [Motivation](#motivation)
 1. [Prior Work](#prior-work)
-1. [Trusted Initial State](#trusted-initial-state)
-1. [Quorum Proof Chain Data Structures](#quorum-proof-chain-data-structures)
-    1. [ChainlockEntry](#chainlockentry)
-    1. [QuorumCommitmentProof](#quorumcommitmentproof)
-    1. [QuorumProofChainResponse](#quorumproofchainresponse)
-1. [Verification Algorithm](#verification-algorithm)
-    1. [Verifier State](#verifier-state)
-    1. [ChainLock Verification](#chainlock-verification)
-    1. [Quorum Commitment Verification](#quorum-commitment-verification)
-    1. [Proof Processing Algorithm](#proof-processing-algorithm)
-1. [Proof Construction](#proof-construction)
-    1. [ChainLock Selection Strategy](#chainlock-selection-strategy)
-    1. [Quorum Commitment Merkle Proof Construction](#quorum-commitment-merkle-proof-construction)
-1. [Dash Core RPC Methods](#dash-core-rpc-methods)
-    1. [getquorumproofchain](#getquorumproofchain)
-    1. [verifyquorumproofchain](#verifyquorumproofchain)
-1. [P2P Messages](#p2p-messages)
-    1. [GETQUORUMPROOFCHAIN](#getquorumproofchain-1)
-    1. [QUORUMPROOFCHAIN](#quorumproofchain)
-1. [gRPC API](#grpc-api)
-1. [Proof Size Analysis](#proof-size-analysis)
+1. [Trust Model](#trust-model)
+1. [Wire Format](#wire-format)
+1. [Verification](#verification)
+1. [Construction and Serving](#construction-and-serving)
+1. [SDK Integration](#sdk-integration)
+1. [Size and Resource Limits](#size-and-resource-limits)
 1. [Security Considerations](#security-considerations)
-1. [Backward Compatibility](#backward-compatibility)
-1. [Reference Implementation](#reference-implementation)
+1. [Compatibility](#compatibility)
 1. [Copyright](#copyright)
 
 ## Abstract
 
-This DIP defines Compact Quorum Proof Chains, a mechanism for trustlessly verifying LLMQ public keys using ChainLocks and the `merkleRootQuorums` field in coinbase transactions. This enables light clients and the Platform SDK to cryptographically verify Platform quorum public keys without trusting any external party.
+This proposal authenticates current Dash Core quorum keys and EvoNode records from
+an application-supplied trusted snapshot. A relay provides ordinary ChainLock
+certificates, quorum mining transactions, and Merkle paths. The SDK verifies them
+locally before verifying Platform responses. Relays supply evidence and do not
+supply trusted keys. No consensus change, zero-knowledge system, trusted setup, or
+specialized proving hardware is required.
 
-The key insight is that a ChainLock at height H proves block H, and that block's coinbase transaction contains a `merkleRootQuorums` covering ALL currently active quorums at that height. This allows verification of any active quorum's commitment using a single chainlocked block's data, resulting in compact proofs of approximately 1 KB in typical scenarios.
+The format uses only mining-transaction handoffs (previously called route B).
+When the mining block lacks a usable ChainLock, a later certificate authenticates
+that block through consecutive X11 headers. There is no alternate quorum-root
+handoff format.
 
 ## Motivation
 
-Platform proof verification currently requires two steps:
-
-1. **GroveDB Proof**: Verify data against a Merkle root (cryptographic)
-2. **Tenderdash Signature**: Verify BLS signature from a Platform quorum (requires quorum public key)
-
-The quorum public key is currently obtained via trusted sources:
-
-| Method | Trust Model |
-| ------ | ----------- |
-| Dash Core RPC | Trust the node operator |
-| TrustedHttpContextProvider | Trust centralized quorum servers |
-
-Both methods require trusting an external party, which undermines the trustless nature of the verification.
-
-This DIP enables verification of quorum public keys cryptographically using only:
-
-1. A hardcoded checkpoint (block hash + known quorum keys) embedded in the SDK
-2. Proofs provided by any untrusted server (verified client-side)
-
-By leveraging the existing ChainLock infrastructure and `merkleRootQuorums` commitment in each block's coinbase, clients can build a cryptographic chain of trust from a known checkpoint to any currently active quorum.
+An SDK can distribute a small, fixed Core snapshot and network addresses with its
+release, then acquire the evidence needed to authenticate newer Platform quorum
+keys. The intended history window is three to twelve months. The proof and the
+SDK verifier both contribute to download cost, so they must be measured together.
 
 ## Prior Work
 
-* [DIP-0002: Special Transactions](https://github.com/dashpay/dips/blob/master/dip-0002.md)
-* [DIP-0004: Simplified Verification of Deterministic Masternode Lists](https://github.com/dashpay/dips/blob/master/dip-0004.md)
-* [DIP-0006: Long-Living Masternode Quorums](https://github.com/dashpay/dips/blob/master/dip-0006.md)
-* [DIP-0007: LLMQ Signing Requests / Sessions](https://github.com/dashpay/dips/blob/master/dip-0007.md)
-* [DIP-0008: ChainLocks](https://github.com/dashpay/dips/blob/master/dip-0008.md)
+[DIP-0004](dip-0004.md) commits simplified masternode lists in coinbase transactions.
+[DIP-0006](dip-0006.md) defines LLMQ commitments and
+[DIP-0008](dip-0008.md) defines ChainLocks.
 
-## Trusted Initial State
+The earlier version of this proposal carried intermediate coinbases and quorum
+root openings. A mining transaction already commits the complete next quorum
+commitment. Authenticating that transaction avoids the intermediate coinbase and
+second tree opening. Only the final coinbase remains, because it supplies the
+roots needed for current quorum and masternode record openings.
 
-Verification requires a trusted starting point embedded in client software. This checkpoint must contain:
+## Trust Model
 
-1. A block hash and height identifying a known-good block
-2. The public keys of active ChainLock quorums at that height (identified by quorum hash and type)
+The application independently fixes a snapshot containing:
 
-The specific serialization format of this checkpoint is an implementation detail left to client software.
+* Network (0 mainnet, 1 testnet).
+* Core height and block hash.
+* Simplified masternode-list Merkle root.
+* Active quorum-list Merkle root.
 
-### Quorum Lifespans and Checkpoint Freshness
+A response MUST exactly match this snapshot. A relay-provided snapshot MUST NOT
+be promoted to trusted configuration merely because a proof is internally valid.
+A successfully verified target can serve as the next session checkpoint.
 
-The effectiveness of this verification scheme depends on overlapping quorum lifespans between the checkpoint and current chain tip.
+The design assumes historically authenticated ChainLock quorums do not sign false
+certificates, including after leaving the active set. It proves a sequence of
+statements by authenticated quorum keys. It does **not** independently reconstruct
+DKG, full Core consensus, or the exact active signing-quorum selection for each
+certificate. Membership of a key is not proof of its current signing authority.
+These are deliberate constraints of this compact certificate trust model.
 
-**Mainnet:**
+## Wire Format
 
-| Quorum Type | Purpose | DKG Interval | Active Count | Lifespan |
-| ----------- | ------- | ------------ | ------------ | -------- |
-| LLMQ_400_60 | ChainLocks | 288 blocks (~12 hours) | 4 | ~48 hours |
-| LLMQ_100_67 | Platform | 24 blocks (~1 hour) | 24 | ~24 hours |
+All proof framing integers are unsigned little-endian fixed-width integers.
+Hashes are 32 bytes in Core serialization order, reversed from RPC display hex.
+Nested transactions and commitments use their existing canonical Core consensus
+serialization, including CompactSize where consensus requires it. There is no
+protobuf or general-purpose object encoding on the proof wire.
 
-**Testnet:**
-
-| Quorum Type | Purpose | DKG Interval | Active Count | Lifespan |
-| ----------- | ------- | ------------ | ------------ | -------- |
-| LLMQ_50_60 | ChainLocks | 288 blocks (~12 hours) | 4 | ~48 hours |
-| LLMQ_25_67 | Platform | 24 blocks (~1 hour) | 24 | ~24 hours |
-
-With a checkpoint less than 36 hours old, at least one ChainLock quorum from the checkpoint will still be active, enabling direct verification with a single chainlock. Older checkpoints require bridging through intermediate chainlock quorums.
-
-## Quorum Proof Chain Data Structures
-
-### ChainlockEntry
-
-A ChainLock signature that proves a specific block is canonical.
-
-| Field | Type | Size | Description |
-| ----- | ---- | ---- | ----------- |
-| height | int32_t | 4 | Height of the chainlocked block |
-| blockHash | uint256 | 32 | Hash of the chainlocked block |
-| signature | BLSSig | 96 | Recovered threshold signature |
-| signingQuorumHash | uint256 | 32 | Hash of the quorum that signed this chainlock |
-| signingQuorumType | uint8_t | 1 | LLMQ type of the signing quorum |
-
-Total size: ~165 bytes
-
-**Note**: The signing quorum can be deterministically calculated using `SelectQuorumForSigning` given the height, but including it explicitly simplifies verification and enables the verifier to check if the signing quorum is known before attempting signature verification.
-
-### QuorumCommitmentProof
-
-A proof that a specific quorum commitment is included in a chainlocked block's `merkleRootQuorums`.
-
-| Field | Type | Size | Description |
-| ----- | ---- | ---- | ----------- |
-| commitment | CFinalCommitment | variable | The quorum final commitment (see [DIP-0006](https://github.com/dashpay/dips/blob/master/dip-0006.md)) |
-| chainlockIndex | uint32_t | 4 | Index into the response's chainlocks array |
-| quorumMerklePathLength | compactSize uint | 1-9 | Number of hashes in the merkle path |
-| quorumMerklePath | uint256[] | 32 * length | Merkle path from commitment hash to `merkleRootQuorums` |
-| coinbaseTx | CTransaction | variable | The coinbase transaction containing `merkleRootQuorums` |
-| coinbaseMerkleProof | CPartialMerkleTree | variable | Merkle proof that coinbase is in the block |
-
-The `CFinalCommitment` structure is defined in [DIP-0006](https://github.com/dashpay/dips/blob/master/dip-0006.md) and contains the `quorumPublicKey` that this proof ultimately verifies.
-
-Estimated size: ~700-900 bytes (varies by quorum size and tree depth)
-
-### QuorumProofChainResponse
-
-The complete response containing all data needed to verify a target quorum.
-
-| Field | Type | Size | Description |
-| ----- | ---- | ---- | ----------- |
-| headerCount | compactSize uint | 1-9 | Number of block headers |
-| headers | CBlockHeader[] | 80 * count | Block headers for each chainlock |
-| chainlockCount | compactSize uint | 1-9 | Number of chainlock entries |
-| chainlocks | ChainlockEntry[] | variable | ChainLock signatures in verification order |
-| quorumProofCount | compactSize uint | 1-9 | Number of quorum proofs |
-| quorumProofs | QuorumCommitmentProof[] | variable | Quorum commitment proofs |
-
-Headers and chainlocks are paired by index: `headers[i]` corresponds to `chainlocks[i]`.
-
-## Verification Algorithm
-
-### Verifier State
-
-The verifier maintains the following state:
+A `blob` is `length:u32 || bytes[length]`. A `path` is:
 
 ```text
-H_verified: uint32           // Highest height cryptographically confirmed
-Q_known: Map<(uint256, uint8), BLSPubKey>  // Known quorum public keys
-                             // Key: (quorumHash, quorumType)
-                             // Value: quorumPublicKey
+index:u32 | leaf_count:u32 | sibling_count:u8 | siblings[32]...
 ```
 
-Initial state is populated from the checkpoint:
-
-* `H_verified = checkpoint.height`
-* `Q_known = checkpoint.chainlockQuorums ∪ checkpoint.platformQuorums`
-
-### ChainLock Verification
-
-To verify a ChainLock against a known quorum:
-
-1. Verify the signing quorum is in `Q_known`
-2. Retrieve the quorum's public key from `Q_known`
-3. Calculate the message hash:
-   `msgHash = SHA256(llmqType, quorumHash, SHA256(height), blockHash)`
-4. Verify the BLS signature against the quorum public key and message hash
-5. Verify that `hash(header) == blockHash`
-
-If verification succeeds, update `H_verified = max(H_verified, chainlock.height)`.
-
-### Quorum Commitment Verification
-
-To verify a quorum commitment proof:
-
-1. Verify `chainlockIndex` references a chainlock with height <= `H_verified`
-2. Retrieve the corresponding coinbase transaction and block header
-3. Verify the coinbase merkle proof:
-   * The `coinbaseMerkleProof` must prove that `coinbaseTx` is in the block
-   * The block's merkle root must match `header.hashMerkleRoot`
-4. Extract `merkleRootQuorums` from the coinbase transaction's extra payload
-5. Calculate `commitmentHash = SHA256(serialize(commitment))`
-6. Verify the quorum merkle path:
-   * Compute the merkle root from `commitmentHash` and `quorumMerklePath`
-   * The computed root must match `merkleRootQuorums`
-7. Verify the commitment's `quorumSig`:
-   * This threshold signature proves the quorum members agreed on this public key
-   * Verification uses the aggregated public keys from the commitment's `signers` bitvector
-
-If verification succeeds, add the quorum to `Q_known`:
-`Q_known[(commitment.quorumHash, commitment.llmqType)] = commitment.quorumPublicKey`
-
-### Proof Processing Algorithm
+A `certificate` is exactly 180 bytes:
 
 ```text
-FUNCTION verify_quorum_proof(checkpoint, proof, targetQuorum) -> Result<BLSPubKey>:
-
-    // Initialize state from checkpoint
-    H_verified = checkpoint.height
-    Q_known = checkpoint.chainlockQuorums ∪ checkpoint.platformQuorums
-
-    // Process proof iteratively until no more progress
-    LOOP:
-        made_progress = false
-
-        // 1. Process chainlocks that can now be verified
-        FOR i, CL IN enumerate(proof.chainlocks):
-            IF CL.height <= H_verified:
-                CONTINUE  // Already verified
-
-            IF NOT Q_known.contains((CL.signingQuorumHash, CL.signingQuorumType)):
-                CONTINUE  // Cannot verify yet
-
-            // Verify chainlock signature
-            quorumPubKey = Q_known[(CL.signingQuorumHash, CL.signingQuorumType)]
-            msgHash = SHA256(CL.signingQuorumType, CL.signingQuorumHash,
-                            SHA256(CL.height), CL.blockHash)
-            VERIFY_BLS(CL.signature, quorumPubKey, msgHash)?
-
-            // Verify header matches chainlock
-            header = proof.headers[i]
-            ASSERT(hash(header) == CL.blockHash)
-
-            // Extend verified horizon
-            H_verified = CL.height
-            made_progress = true
-
-        // 2. Learn quorum commitments from verified blocks
-        FOR QP IN proof.quorumProofs:
-            clHeight = proof.chainlocks[QP.chainlockIndex].height
-            IF clHeight > H_verified:
-                CONTINUE  // Chainlock not yet verified
-
-            key = (QP.commitment.quorumHash, QP.commitment.llmqType)
-            IF Q_known.contains(key):
-                CONTINUE  // Already known
-
-            // Verify coinbase is in the chainlocked block
-            VERIFY_COINBASE_MERKLE_PROOF(QP.coinbaseTx, QP.coinbaseMerkleProof,
-                                          proof.headers[QP.chainlockIndex])?
-
-            // Verify commitment is in merkleRootQuorums
-            merkleRootQuorums = extract_merkle_root_quorums(QP.coinbaseTx)
-            VERIFY_QUORUM_MERKLE_PATH(QP.commitment, QP.quorumMerklePath,
-                                       merkleRootQuorums)?
-
-            // Verify commitment signature (proves DKG validity)
-            VERIFY_COMMITMENT_SIGNATURE(QP.commitment)?
-
-            // Add to known quorums
-            Q_known[key] = QP.commitment.quorumPublicKey
-            made_progress = true
-
-        IF NOT made_progress:
-            BREAK
-
-    // 3. Return target quorum if found
-    targetKey = (targetQuorum.quorumHash, targetQuorum.quorumType)
-    RETURN Q_known.get(targetKey).ok_or(Error::InsufficientProof)
+height:u32 | core_block_header[80] | Basic_BLS_signature[96]
 ```
 
-## Proof Construction
+The main proof is:
 
-This section describes how a node constructs proofs for requesting clients.
+```text
+magic[8] = ASCII "DASHNC02"
+snapshot {
+  network:u8 | height:u32 | block_hash[32]
+  masternode_root[32] | quorum_root[32]
+}
+seed_commitment:blob | seed_membership:path
+handoff_count:u16
+handoffs[handoff_count] {
+  certificate
+  mining_transaction:blob | transaction_membership:path
+  ancestor_count:u16 | ancestor_headers[80]...
+}
+final_certificate
+final_coinbase:blob | coinbase_membership:path
+```
 
-### ChainLock Selection Strategy
+The seed is the complete final quorum commitment, including its vector hash and
+**both** embedded signatures. Its double-SHA256 hash is opened in the snapshot's
+quorum root. Embedded commitment signatures are included in the authenticated
+serialization; this verifier does not re-execute their DKG validation.
 
-The goal is to find the shortest chain of chainlocks from the checkpoint to the target quorum.
+Ancestor headers are ordered oldest first: mining block, then its descendants,
+ending at the certificate's parent. Zero ancestors means the certificate signs
+the mining block itself. The mining height equals certificate height minus
+ancestor count. There is no independent relay-selected mining height.
 
-#### Case 1: Checkpoint quorum overlap exists
+The HTTP bootstrap envelope adds authenticated consensus records:
 
-When the checkpoint is less than approximately 48 hours old:
-
-1. Identify which checkpoint chainlock quorums are still active
-2. Find the most recent chainlock signed by any of these quorums
-3. This single chainlock can prove all currently active quorums
-
-#### Case 2: No overlap
-
-When the checkpoint is more than approximately 48 hours old:
-
-1. Identify the checkpoint chainlock quorum with the longest remaining lifespan at checkpoint time
-2. Find the most recent chainlock signed by that quorum
-3. Learn new chainlock quorums from that block's `merkleRootQuorums`
-4. Repeat with newly learned quorums until reaching a chainlock whose block contains the target quorum
-
-### Quorum Commitment Merkle Proof Construction
-
-The `merkleRootQuorums` in each coinbase is calculated as follows (per [DIP-0004](https://github.com/dashpay/dips/blob/master/dip-0004.md)):
-
-1. Collect all final commitments from all active LLMQ sets at the block height
-2. Calculate `hash = SHA256(serialize(commitment))` for each commitment
-3. Sort hashes in ascending order
-4. Calculate merkle root from the sorted list
-
-To construct a proof for a specific commitment:
-
-1. Retrieve all active commitments at the chainlock height
-2. Compute all commitment hashes and sort them
-3. Find the index of the target commitment's hash
-4. Construct the merkle path from that index to the root
-
-## Dash Core RPC Methods
-
-Platform nodes communicate with their local Dash Core node via RPC, not P2P. The following RPC methods are added to Dash Core for proof generation and verification. Core derives the checkpoint height and active chainlock quorums from the checkpoint block hash.
-
-### getquorumproofchain
-
-Generates a quorum proof chain from a checkpoint to a target quorum.
-
-**Arguments:**
-
-| # | Name | Type | Description |
-| - | ---- | ---- | ----------- |
-| 1 | checkpointBlockHash | string | Block hash of the checkpoint (hex) |
-| 2 | targetQuorumHash | string | Hash of the target quorum to prove (hex) |
-| 3 | targetQuorumType | number | LLMQ type of the target quorum |
-
-**Result:**
-
-Returns the `QuorumProofChainResponse` structure with headers, chainlocks, and quorum proofs encoded as hex strings.
-
-### verifyquorumproofchain
-
-Verifies a quorum proof chain and returns the target quorum's public key if valid.
-
-**Arguments:**
-
-| # | Name | Type | Description |
-| - | ---- | ---- | ----------- |
-| 1 | checkpointBlockHash | string | Block hash of the checkpoint (hex) |
-| 2 | proof | object | The proof chain to verify |
-| 3 | targetQuorumHash | string | Hash of the target quorum (hex) |
-| 4 | targetQuorumType | number | LLMQ type of the target quorum |
-
-**Result:**
-
-```json
-{
-  "valid": true,
-  "quorumPublicKey": "hexstring"
+```text
+proof:blob
+record_count:u8
+records[record_count] {
+  kind:u8                  # 0 quorum commitment; 1 simplified masternode entry
+  consensus_leaf:blob
+  membership:path
 }
 ```
 
-Or on failure:
+A quorum leaf is the full commitment. A masternode leaf is exactly the
+`CSimplifiedMNListEntry::CalcHash` preimage, excluding the network-only version
+prefix. The decoder must consume the complete supported canonical serialization;
+ambiguous or unsupported masternode encodings are rejected.
 
-```json
-{
-  "valid": false,
-  "error": "error message"
-}
+## Verification
+
+1. Enforce all framing limits before allocation. Reject truncation, trailing
+   bytes, unknown tags, and retired format identifiers.
+2. Require exact equality with the application's trusted snapshot. This version
+   supports the Basic BLS and coinbase-v3 era after buried v20 activation on
+   mainnet and testnet.
+3. Parse the seed commitment canonically, require a nonzero subgroup-valid public
+   key, and verify its membership in the snapshot quorum root.
+4. For each handoff, require a strictly increasing certificate height and the
+   network's ChainLock quorum type (2 mainnet, 1 testnet). Verify its Basic BLS
+   signature using the current key and Dash's existing ChainLock request/signing
+   hash construction, including the certificate height, quorum identity, and X11
+   block hash.
+5. Starting at that signed header, check every `hashPrevBlock` against the X11
+   hash of the preceding supplied header. Verify the complete mining transaction
+   against the oldest header's transaction root. Transaction index must be
+   nonzero. Require a canonical v3 quorum-commitment transaction with no inputs,
+   outputs, or locktime, payload version 1, and the derived mining height.
+6. Parse its full non-null commitment and install the authenticated next key.
+   Reject a handoff to the same quorum identity. The mining block may precede
+   the initial snapshot; certificate heights still advance beyond it.
+7. Verify the final certificate with the last key. Open transaction index zero,
+   parse its complete v3 coinbase, and require coinbase payload height to equal
+   the signed height. Extract both final roots.
+8. Enforce the caller's minimum target height. Verify every requested record's
+   double-SHA256 leaf hash against its corresponding final root. Require the
+   requested Platform quorum type and hash to match the authenticated commitment.
+9. Publish the new state, key, and eligible EvoNode endpoints only after the entire
+   envelope succeeds. Then verify the Platform response signature and GroveDB
+   proof before returning application data or advancing Platform freshness state.
+
+Merkle verification consumes exactly the tree depth implied by leaf count. An
+odd final node must use its own hash as the duplicate sibling. Equal siblings at
+non-duplicate positions are rejected. Transaction and record leaves of exactly
+64 bytes are rejected to prevent interpreting an internal tree node as a leaf.
+
+## Construction and Serving
+
+An unpruned Core node opts in with `-quorumproofindex`. Startup scans historical
+blocks to archive coinbase-carried ChainLocks and quorum mining transaction
+paths. Missing history causes indexing to fail explicitly. A new database prefix
+separates this index from the retired format. Disconnect handling tracks the
+carrier block, preserving evidence from an earlier carrier when a later repeated
+certificate disconnects.
+
+Construction works backwards from the requested target signer to a quorum present
+in the initial snapshot. For each needed quorum, the node locates its mining
+transaction and a usable certificate at or after mining. Searching nearby
+certificates minimizes serialized bytes per height advanced; the search can
+expand when a nearby ChainLock is unavailable. This heuristic is not part of
+verification or a claim of global minimum size. Construction fails explicitly if
+history, a bridge, or the resource budget is unavailable. Multiple bounded
+requests can advance a checkpoint over longer gaps.
+
+The Core RPC is:
+
+```text
+getquorumproofchain checkpoint_hash height=0 quorum_hash="" llmq_type=0 node_count=4
 ```
 
-## P2P Messages
+`height=0` chooses the latest archived certificate within the search budget. A
+positive height is a minimum: the node searches for a certificate at or above
+both it and snapshot height plus one. `quorum_hash` and `llmq_type` request one
+quorum opening; `node_count` requests zero through fifteen eligible EvoNodes.
+The result contains `proof_hex`, `bootstrap_hex`, and `target`. The bootstrap
+field is empty if no records were requested. Generation supports mainnet/testnet.
 
-These messages enable SPV light clients to request quorum proofs directly from peers without requiring a local Dash Core node. Nodes supporting these messages must advertise protocol version >= XXXXXX (to be assigned).
-
-### GETQUORUMPROOFCHAIN
-
-Request a quorum proof chain from a peer. The serving node derives the checkpoint height and active chainlock quorums from the checkpoint block hash.
-
-| Field | Type | Size | Description |
-| ----- | ---- | ---- | ----------- |
-| checkpointBlockHash | uint256 | 32 | Block hash of the client's checkpoint |
-| targetQuorumHash | uint256 | 32 | Hash of the target quorum to prove |
-| targetQuorumType | uint8_t | 1 | LLMQ type of the target quorum |
-
-### QUORUMPROOFCHAIN
-
-Response containing the proof chain.
-
-The response uses the `QuorumProofChainResponse` structure defined in [Quorum Proof Chain Data Structures](#quorum-proof-chain-data-structures).
-
-| Field | Type | Size | Description |
-| ----- | ---- | ---- | ----------- |
-| response | QuorumProofChainResponse | variable | The complete proof chain |
-
-## gRPC API
-
-DAPI exposes quorum proof functionality to remote clients via gRPC. Internally, DAPI calls the Dash Core RPC methods described above on its local Core node.
-
-```protobuf
-service Core {
-    rpc GetQuorumProofChain(GetQuorumProofChainRequest)
-        returns (GetQuorumProofChainResponse);
-}
-
-message GetQuorumProofChainRequest {
-    bytes checkpoint_block_hash = 1;    // 32 bytes
-    bytes target_quorum_hash = 2;       // 32 bytes
-    uint32 target_quorum_type = 3;
-}
-
-message ChainlockEntry {
-    int32 height = 1;
-    bytes block_hash = 2;               // 32 bytes
-    bytes signature = 3;                // 96 bytes
-    bytes signing_quorum_hash = 4;      // 32 bytes
-    uint32 signing_quorum_type = 5;
-}
-
-message QuorumCommitmentProof {
-    bytes commitment = 1;               // Serialized CFinalCommitment
-    uint32 chainlock_index = 2;
-    repeated bytes quorum_merkle_path = 3;  // Each 32 bytes
-    bytes coinbase_tx = 4;              // Serialized transaction
-    bytes coinbase_merkle_proof = 5;    // Serialized CPartialMerkleTree
-}
-
-message GetQuorumProofChainResponse {
-    repeated bytes headers = 1;         // Each 80 bytes
-    repeated ChainlockEntry chainlocks = 2;
-    repeated QuorumCommitmentProof quorum_proofs = 3;
-}
+```text
+verifyquorumproofchain checkpoint_object proof_hex minimum_height=0
 ```
 
-## Proof Size Analysis
+The verification RPC takes all independently trusted snapshot fields and returns
+`valid` plus either the authenticated `target` or an `error`. It does not consult
+RPC metadata to obtain trust roots.
 
-### Component Sizes
+DAPI and quorum servers expose the same relay interface:
 
-| Component | Size |
-| --------- | ---- |
-| Block header | 80 bytes |
-| ChainlockEntry | ~165 bytes |
-| QuorumCommitmentProof | ~700-900 bytes |
+```http
+POST /proofs
+Content-Type: application/json
 
-### Per-Chainlock Overhead
+{"checkpoint":"<RPC block hash>","height":1549547,
+ "quorumHash":"<RPC quorum hash>","llmqType":6,"nodeCount":4}
+```
 
-Each chainlock in the proof requires:
+Success is the binary bootstrap envelope with content type
+`application/octet-stream`; HTTP gzip compression is permitted. Servers bound
+request sizes, concurrent Core workers, cached bytes, and cache lifetime.
+A timeout does not release a worker permit while its blocking RPC is still
+running. Failure returns an HTTP error, never trusted fallback keys.
 
-* 1 ChainlockEntry: ~165 bytes
-* 1 Block header: 80 bytes
-* **Subtotal: ~245 bytes**
+## SDK Integration
 
-### Scenarios
+Mainnet/testnet network builders use the verified provider by default. Release
+snapshots and untrusted seed addresses are embedded. Proof sources can be seeded
+EvoNodes, quorum servers, or an explicitly supplied list of either. Authenticated
+EvoNode records add connection candidates; addresses themselves never confer
+signing authority.
 
-#### Fresh Checkpoint
+The synchronous Platform verifier reports a typed missing-quorum condition. The
+SDK asynchronously obtains a bootstrap proof, verifies it, then repeats the
+complete Platform verification. This applies to reads and transaction results,
+and works without synchronous network calls in browser verification code.
 
-When the checkpoint is less than 36 hours old, a checkpoint chainlock quorum is still active. A single chainlock reaches the tip.
+Applications can explicitly select trusted mode or supply their own context
+provider. Trusted mode obtains quorum keys from its configured provider and skips
+the additional Core bootstrap proof download and verification; Platform response
+proof verification remains separately configurable. Failed verified mode MUST NOT
+silently become trusted mode.
 
-| Component | Count | Size Each | Total |
-| --------- | ----- | --------- | ----- |
-| Chainlock + header | 1 | 245 B | 245 B |
-| Target quorum proof | 1 | 800 B | 800 B |
-| **Total** | | | **~1 KB** |
+## Size and Resource Limits
 
-#### Stale Checkpoint
+| Item | Maximum |
+| --- | ---: |
+| Decoded proof or bootstrap HTTP response | 1,048,576 bytes |
+| Certificates, including final certificate | 4,096 |
+| Ancestor headers across the whole proof | 4,096 |
+| Merkle leaf count | 100,000 |
+| Merkle siblings | 17 |
+| Transaction blob | 100,000 bytes |
+| Seed commitment blob | 1,024 bytes |
+| Bootstrap records | 16 |
+| Record leaf | 4,096 bytes |
 
-When the checkpoint is 2-4 days old, checkpoint quorums have expired. Need 1-2 bridging chainlock quorums.
+These limits bound individual requests, not the duration of history. Certificate
+availability and quorum cadence determine achievable history per request.
 
-| Component | Count | Size Each | Total |
-| --------- | ----- | --------- | ----- |
-| Chainlocks + headers | 2-3 | 245 B | 490-735 B |
-| Bridge CL quorum proofs | 1-2 | 800 B | 800-1,600 B |
-| Target quorum proof | 1 | 800 B | 800 B |
-| **Total** | | | **~2-3 KB** |
+Real testnet history encoded by the mining-only reference implementation measured
+85,827 / 159,536 / 314,357 gzip bytes for 90 / 180 / 366 days respectively.
+The shared short cross-implementation fixture is 3,469 raw proof bytes, or 4,506
+raw bytes with one quorum and one EvoNode opening. These are testnet observations,
+not mainnet measurements or worst-case guarantees. Final record openings add to
+the history-only figures. HTTP compression is a transport optimization and does
+not change verification.
 
-#### Very Old Checkpoint
-
-When the checkpoint is 30+ days old, approximately 15 bridging chainlock quorums are needed (one per ~2 day interval).
-
-| Component | Count | Size Each | Total |
-| --------- | ----- | --------- | ----- |
-| Chainlocks + headers | ~15 | 245 B | ~3,700 B |
-| Bridge CL quorum proofs | ~15 | 800 B | ~12,000 B |
-| Target quorum proof | 1 | 800 B | 800 B |
-| **Total** | | | **~16 KB** |
-
-### Summary
-
-| Checkpoint Age | Proof Size |
-| -------------- | ---------- |
-| < 36 hours | ~1 KB |
-| 2-4 days | ~2-3 KB |
-| 30+ days | ~16 KB |
-
-Checkpoints should be updated with each SDK release (monthly recommended) to maintain minimal proof sizes.
+The release requirement is less than 500,000 additional SDK download bytes.
+A standalone verifier artifact cannot establish the integrated SDK delta; compare
+matching release targets and compression settings before shipping a release.
 
 ## Security Considerations
 
-### Trust Assumptions
+An attacker controlling all relays can withhold evidence, replay sufficiently
+recent valid evidence, or exhaust a client's bounded request budget. Successful
+verification establishes authenticity under the trust model, not that the target
+is the globally newest block. Platform signed-time/height freshness policy and
+caller minimum heights are required. Unauthenticated metadata must not advance a
+freshness ratchet.
 
-| Assumption | Basis |
-| ---------- | ----- |
-| Checkpoint is correct | Code review, reproducible builds, distribution via official channels |
-| BLS signatures unforgeable | Cryptographic hardness of BLS scheme |
-| Merkle proofs sound | Collision resistance of SHA-256 |
-| ChainLocks are secure | DIP-0008 security analysis |
+The design does not protect against compromise of enough historical quorum keys
+to forge this certificate chain. Stronger guarantees require a stronger trust
+model or additional consensus evidence and have different size costs.
 
-### Attack Resistance
+Snapshots are release trust material. Their hashes and roots require independent
+release verification and network binding. Updating a snapshot from an unverified
+HTTP response defeats the design. Persistent caches, if implemented, require the
+same provenance and integrity protections as their original trust configuration.
 
-| Attack | Why It Fails |
-| ------ | ------------ |
-| Forge chainlock | Requires 240 of 400 masternode operator keys (60% threshold) |
-| Forge quorum commitment | `quorumSig` is threshold signature requiring quorum threshold |
-| Wrong block hash | Header hash must match chainlock's `blockHash` |
-| Tampered coinbase | Coinbase merkle proof verification fails |
-| Tampered commitment | Commitment merkle proof verification fails |
-| Omit proof data | Verification fails, client retries or tries different server |
+No headers are treated as authenticated merely because a matching quorum key is
+known. Every accepted statement is covered by the certificate chain under the
+historical quorum honesty assumption above. Full state validity and exact signer
+eligibility are deliberately outside this proof's statement.
 
-### Failure Modes
+## Compatibility
 
-| Failure | Cause | Resolution |
-| ------- | ----- | ---------- |
-| No verifiable chainlock | Server omitted required data | Retry or try different server |
-| Verification timeout | Large proof on slow device | Increase timeout or use fresher checkpoint |
-| Checkpoint too old | SDK not updated in 30+ days | Ship new checkpoint in SDK update |
+`DASHNC02` replaces the earlier proof encoding and RPC argument layout. Old proof
+bytes are rejected; there is no route-A compatibility branch. Existing Dash
+blocks, commitments, signatures, and consensus rules are unchanged. This proposal
+does not assign new P2P inventory types or require P2P protocol changes.
 
-## Backward Compatibility
-
-This DIP introduces new P2P messages (`GETQUORUMPROOFCHAIN`, `QUORUMPROOFCHAIN`) and gRPC endpoints that do not affect existing functionality. Nodes that do not implement this DIP will not respond to these messages.
-
-Clients implementing trustless verification should fall back to trusted verification methods if:
-
-1. No peers support the new messages
-2. Proof verification fails repeatedly
-3. The checkpoint is too old to construct a valid proof chain
-
-## Reference Implementation
-
-Reference implementation will be provided in:
-
-* Dash Core: Chainlock indexing and proof generation RPCs
-* Platform: `rs-trustless-quorum-verifier` crate for Rust verification
-* DAPI: gRPC endpoint wrapping Core RPCs
+Deploy index-enabled Core and relay endpoints before distributing SDK releases
+that require them by default. Explicit trusted mode remains available to callers.
+Devnet/regtest require explicit trust configuration; this version does not invent
+release checkpoints for those networks.
 
 ## Copyright
 
-Copyright (c) 2026 Dash Core Group, Inc. [Licensed under the MIT License](https://opensource.org/licenses/MIT)
+Copyright (c) 2026 PastaPastaPasta. Licensed under the MIT License.
