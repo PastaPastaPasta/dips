@@ -14,7 +14,7 @@
 
 1. [Abstract](#abstract)
 1. [Motivation](#motivation)
-1. [Prior Work](#prior-work)
+1. [Protocol Foundations](#protocol-foundations)
 1. [Trust Model](#trust-model)
 1. [Wire Format](#wire-format)
 1. [Verification](#verification)
@@ -22,7 +22,6 @@
 1. [SDK Integration](#sdk-integration)
 1. [Size and Resource Limits](#size-and-resource-limits)
 1. [Security Considerations](#security-considerations)
-1. [Compatibility](#compatibility)
 1. [Copyright](#copyright)
 
 ## Abstract
@@ -31,13 +30,12 @@ This proposal authenticates current Dash Core quorum keys and EvoNode records fr
 an application-supplied trusted snapshot. A relay provides ordinary ChainLock
 certificates, quorum mining transactions, and Merkle paths. The SDK verifies them
 locally before verifying Platform responses. Relays supply evidence and do not
-supply trusted keys. No consensus change, zero-knowledge system, trusted setup, or
-specialized proving hardware is required.
+supply trusted keys. The proof uses existing Dash blocks, commitments, signatures,
+and consensus rules.
 
-The format uses only mining-transaction handoffs (previously called route B).
+Each handoff authenticates the next quorum through its mining transaction.
 When the mining block lacks a usable ChainLock, a later certificate authenticates
-that block through consecutive X11 headers. There is no alternate quorum-root
-handoff format.
+that block through consecutive X11 headers.
 
 ## Motivation
 
@@ -46,17 +44,16 @@ release, then acquire the evidence needed to authenticate newer Platform quorum
 keys. The intended history window is three to twelve months. The proof and the
 SDK verifier both contribute to download cost, so they must be measured together.
 
-## Prior Work
+## Protocol Foundations
 
 [DIP-0004](dip-0004.md) commits simplified masternode lists in coinbase transactions.
 [DIP-0006](dip-0006.md) defines LLMQ commitments and
 [DIP-0008](dip-0008.md) defines ChainLocks.
 
-The earlier version of this proposal carried intermediate coinbases and quorum
-root openings. A mining transaction already commits the complete next quorum
-commitment. Authenticating that transaction avoids the intermediate coinbase and
-second tree opening. Only the final coinbase remains, because it supplies the
-roots needed for current quorum and masternode record openings.
+A mining transaction contains the complete next quorum commitment. A handoff
+authenticates that transaction with a Merkle path to a ChainLock-authenticated
+block. The final coinbase supplies the quorum and masternode roots used to
+authenticate the requested records.
 
 ## Trust Model
 
@@ -70,6 +67,9 @@ The application independently fixes a snapshot containing:
 A response MUST exactly match this snapshot. A relay-provided snapshot MUST NOT
 be promoted to trusted configuration merely because a proof is internally valid.
 A successfully verified target can serve as the next session checkpoint.
+
+This proposal defines mainnet and testnet snapshots and quorum parameters.
+Devnet and regtest require application-supplied trust configuration.
 
 The design assumes historically authenticated ChainLock quorums do not sign false
 certificates, including after leaving the active set. It proves a sequence of
@@ -147,10 +147,10 @@ ambiguous or unsupported masternode encodings are rejected.
 ## Verification
 
 1. Enforce all framing limits before allocation. Reject truncation, trailing
-   bytes, unknown tags, and retired format identifiers.
-2. Require exact equality with the application's trusted snapshot. This version
-   supports the Basic BLS and coinbase-v3 era after buried v20 activation on
-   mainnet and testnet.
+   bytes, unknown tags, and a magic value other than `DASHNC02`.
+2. Require exact equality with the application's trusted snapshot. The snapshot
+   MUST be after v20 activation on mainnet or testnet; the proof uses Basic BLS
+   signatures and v3 coinbase payloads.
 3. Parse the seed commitment canonically, require a nonzero subgroup-valid public
    key, and verify its membership in the snapshot quorum root.
 4. For each handoff, require a strictly increasing certificate height and the
@@ -185,10 +185,9 @@ non-duplicate positions are rejected. Transaction and record leaves of exactly
 
 An unpruned Core node opts in with `-quorumproofindex`. Startup scans historical
 blocks to archive coinbase-carried ChainLocks and quorum mining transaction
-paths. Missing history causes indexing to fail explicitly. A new database prefix
-separates this index from the retired format. Disconnect handling tracks the
-carrier block, preserving evidence from an earlier carrier when a later repeated
-certificate disconnects.
+paths. Missing history causes indexing to fail explicitly. Disconnect handling
+tracks the carrier block, preserving evidence from an earlier carrier when a
+later repeated certificate disconnects.
 
 Construction works backwards from the requested target signer to a quorum present
 in the initial snapshot. For each needed quorum, the node locates its mining
@@ -244,6 +243,9 @@ EvoNodes, quorum servers, or an explicitly supplied list of either. Authenticate
 EvoNode records add connection candidates; addresses themselves never confer
 signing authority.
 
+Verified SDK operation requires reachable proof-serving endpoints backed by
+index-enabled Core nodes.
+
 The synchronous Platform verifier reports a typed missing-quorum condition. The
 SDK asynchronously obtains a bootstrap proof, verifies it, then repeats the
 complete Platform verification. This applies to reads and transaction results,
@@ -272,7 +274,7 @@ silently become trusted mode.
 These limits bound individual requests, not the duration of history. Certificate
 availability and quorum cadence determine achievable history per request.
 
-Real testnet history encoded by the mining-only reference implementation measured
+Real testnet history encoded by the reference implementation measured
 85,827 / 159,536 / 314,357 gzip bytes for 90 / 180 / 366 days respectively.
 The shared short cross-implementation fixture is 3,469 raw proof bytes, or 4,506
 raw bytes with one quorum and one EvoNode opening. These are testnet observations,
@@ -306,18 +308,6 @@ No headers are treated as authenticated merely because a matching quorum key is
 known. Every accepted statement is covered by the certificate chain under the
 historical quorum honesty assumption above. Full state validity and exact signer
 eligibility are deliberately outside this proof's statement.
-
-## Compatibility
-
-`DASHNC02` replaces the earlier proof encoding and RPC argument layout. Old proof
-bytes are rejected; there is no route-A compatibility branch. Existing Dash
-blocks, commitments, signatures, and consensus rules are unchanged. This proposal
-does not assign new P2P inventory types or require P2P protocol changes.
-
-Deploy index-enabled Core and relay endpoints before distributing SDK releases
-that require them by default. Explicit trusted mode remains available to callers.
-Devnet/regtest require explicit trust configuration; this version does not invent
-release checkpoints for those networks.
 
 ## Copyright
 
