@@ -188,11 +188,21 @@ non-duplicate positions are rejected. Transaction and record leaves of exactly
 
 ## Construction and Serving
 
-An unpruned Core node opts in with `-quorumproofindex`. Startup scans historical
-blocks to archive coinbase-carried ChainLocks and quorum mining transaction
-paths. Missing history causes indexing to fail explicitly. Disconnect handling
-tracks the carrier block, preserving evidence from an earlier carrier when a
-later repeated certificate disconnects.
+Core reads historical evidence from block files on demand. ChainLock code locates
+coinbase-carried certificates using exponential search followed by binary search:
+consensus requires the certified height to never decrease, and a non-null
+certificate cannot be followed by a null one. The existing mined-commitment
+database identifies quorum mining blocks; their transactions and Merkle paths
+are read and constructed as needed. No additional persistent index or startup
+scan is required. A bounded certificate cache lasts for one RPC request.
+
+Construction uses a fixed view of the active chain. Disk reads and proof
+verification run outside the main chain lock; existing quorum database queries
+take short locks. Before returning, Core checks that the target certificate's
+carrier remains on the active chain. A conflicting reorganization requires a
+retry. Missing or pruned block data causes an explicit error rather than being
+interpreted as an absent certificate. Proof-serving nodes should retain the
+historical blocks needed by their supported checkpoints.
 
 Construction works backwards from the requested target signer to a quorum present
 in the initial snapshot. For each needed quorum, the node locates its mining
@@ -209,7 +219,7 @@ The Core RPC is:
 getquorumproofchain checkpoint_hash height=0 quorum_hash="" llmq_type=0 node_count=4
 ```
 
-`height=0` chooses the latest archived certificate within the search budget. A
+`height=0` chooses the certificate carried by the current chain tip. A
 positive height is a minimum: the node searches for a certificate at or above
 both it and snapshot height plus one. `quorum_hash` and `llmq_type` request one
 quorum opening; `node_count` requests zero through fifteen eligible EvoNodes.
