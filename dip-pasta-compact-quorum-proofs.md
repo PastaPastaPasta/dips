@@ -68,8 +68,8 @@ A response MUST exactly match this snapshot. A relay-provided snapshot MUST NOT
 be promoted to trusted configuration merely because a proof is internally valid.
 A successfully verified target can serve as the next session checkpoint.
 
-This proposal defines mainnet and testnet snapshots and quorum parameters.
-Devnet and regtest require application-supplied trust configuration.
+This proposal supports mainnet and testnet only. Devnet and regtest are outside
+its scope.
 
 The design assumes historically authenticated ChainLock quorums do not sign false
 certificates, including after leaving the active set. It proves a sequence of
@@ -166,9 +166,14 @@ ambiguous or unsupported masternode encodings are rejected.
 6. Parse its full non-null commitment and install the authenticated next key.
    Reject a handoff to the same quorum identity. The mining block may precede
    the initial snapshot; certificate heights still advance beyond it.
-7. Verify the final certificate with the last key. Open transaction index zero,
-   parse its complete v3 coinbase, and require coinbase payload height to equal
-   the signed height. Extract both final roots.
+7. Require the final certificate height to strictly exceed the last handoff's
+   certificate height, or the trusted snapshot height when there are no handoffs,
+   including when the caller's minimum target height is zero. Require the last
+   key's commitment to have the network's ChainLock quorum type (2 mainnet,
+   1 testnet), and verify the final certificate's Basic BLS signature using that
+   key and the request/signing hash construction in step 4. Open transaction
+   index zero, parse its complete v3 coinbase, and require coinbase payload height
+   to equal the signed height. Extract both final roots.
 8. Enforce the caller's minimum target height. Verify every requested record's
    double-SHA256 leaf hash against its corresponding final root. Require the
    requested Platform quorum type and hash to match the authenticated commitment.
