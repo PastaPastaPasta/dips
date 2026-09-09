@@ -164,8 +164,10 @@ ambiguous or unsupported masternode encodings are rejected.
    nonzero. Require a canonical v3 quorum-commitment transaction with no inputs,
    outputs, or locktime, payload version 1, and the derived mining height.
 6. Parse its full non-null commitment and install the authenticated next key.
-   Reject a handoff to the same quorum identity. The mining block may precede
-   the initial snapshot; certificate heights still advance beyond it.
+   Reject a handoff to the same quorum identity. A verifier may accept a mining
+   block that precedes the initial snapshot, provided the certificate height still
+   advances beyond it. Core proof construction may impose a narrower search window
+   when selecting bridges; that is a serving limitation, not a wire-format rule.
 7. Require the final certificate height to strictly exceed the last handoff's
    certificate height, or the trusted snapshot height when there are no handoffs,
    including when the caller's minimum target height is zero. Require the last
@@ -219,8 +221,10 @@ The Core RPC is:
 getquorumproofchain checkpoint_hash height=0 quorum_hash="" llmq_type=0 node_count=4
 ```
 
-`height=0` chooses the certificate carried by the current chain tip. A
-positive height is a minimum: the node searches for a certificate at or above
+`height=0` chooses the latest usable ChainLock at the current chain tip. The
+signature may already be known to the live ChainLock manager before a later
+coinbase carries it. A positive height is a minimum: the node searches for a
+certificate at or above
 both it and snapshot height plus one. `quorum_hash` and `llmq_type` request one
 quorum opening; `node_count` requests zero through fifteen eligible EvoNodes.
 The result contains `proof_hex`, `bootstrap_hex`, and `target`. The bootstrap
