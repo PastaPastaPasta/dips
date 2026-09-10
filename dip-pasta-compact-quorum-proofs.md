@@ -146,13 +146,33 @@ A quorum leaf is the full commitment. A masternode leaf is exactly the
 prefix. The decoder must consume the complete supported canonical serialization;
 ambiguous or unsupported masternode encodings are rejected.
 
+Seed, handoff, and requested quorum commitments MUST use Basic BLS version 3
+(types 1, 2, 3, 4, 6) or rotation version 4 (type 5, index 0–31).
+The signer and valid-member vectors MUST each have the type's exact size and at
+least its threshold number of set bits, with zero unused padding bits:
+
+| Quorum type | Size | Threshold |
+| --- | ---: | ---: |
+| 1 | 50 | 30 |
+| 2 | 400 | 240 |
+| 3 | 400 | 340 |
+| 4 | 100 | 67 |
+| 5 | 60 | 45 |
+| 6 | 25 | 17 |
+
+Unknown types or versions, null quorum hashes, and noncanonical encodings are
+rejected. Public keys and certificate signatures MUST be canonical, non-infinity
+points in the correct BLS subgroups. Embedded commitment signatures remain part
+of the authenticated leaf; their DKG validity is not independently established.
+
 ## Verification
 
 1. Enforce all framing limits before allocation. Reject truncation, trailing
    bytes, unknown tags, and a magic value other than `DASHNC02`.
 2. Require exact equality with the application's trusted snapshot. The snapshot
-   MUST be after v20 activation on mainnet or testnet; the proof uses Basic BLS
-   signatures and v3 coinbase payloads.
+   height MUST exceed 1,987,776 on mainnet or 905,100 on testnet (v20 activation).
+   Snapshot and certificate heights MUST be at most 2,147,483,647; snapshot block
+   hash and quorum root MUST be nonzero.
 3. Parse the seed commitment canonically, require a nonzero subgroup-valid public
    key, and verify its membership in the snapshot quorum root.
 4. For each handoff, require a strictly increasing certificate height and the
@@ -163,16 +183,13 @@ ambiguous or unsupported masternode encodings are rejected.
 5. Starting at that signed header, check every `hashPrevBlock` against the X11
    hash of the preceding supplied header. Verify the complete mining transaction
    against the oldest header's transaction root. Transaction index must be
-   nonzero. Require a canonical v3 quorum-commitment transaction with no inputs,
-   outputs, or locktime, payload version 1, and the derived mining height.
+   nonzero, and ancestor count MUST be less than certificate height. Require a
+   canonical v3 quorum-commitment transaction with no inputs, outputs, or
+   locktime, payload version 1, and the derived mining height.
 6. Parse its full non-null commitment and install the authenticated next key.
-   Reject a handoff to the same quorum identity. A verifier may accept a mining
-   block that precedes the initial snapshot, provided the certificate height still
-   advances beyond it. Core proof construction may impose a narrower search window
-   when selecting bridges; that is a serving limitation, not a wire-format rule.
-   The commitment MUST use a supported version and quorum type, contain complete
-   canonical signer and valid-member vectors, and satisfy that type's declared
-   size, threshold, quorum-index, public-key, and quorum-hash rules.
+   Reject a handoff to the same quorum identity. A mining block preceding the
+   initial snapshot is permitted; the certificate height must still advance
+   beyond the previous certificate or, for the first handoff, the snapshot.
 7. Require the final certificate height to strictly exceed the last handoff's
    certificate height, or the trusted snapshot height when there are no handoffs,
    including when the caller's minimum target height is zero. Require the last
@@ -180,10 +197,16 @@ ambiguous or unsupported masternode encodings are rejected.
    1 testnet), and verify the final certificate's Basic BLS signature using that
    key and the request/signing hash construction in step 4. Open transaction
    index zero, parse its complete v3 coinbase, and require coinbase payload height
-   to equal the signed height. Extract both final roots.
-8. Enforce the caller's minimum target height. Verify every requested record's
-   double-SHA256 leaf hash against its corresponding final root. Require the
-   requested Platform quorum type and hash to match the authenticated commitment.
+   to equal the signed height. Require one coinbase input, a scriptSig of 1–100
+   bytes, 1–4,096 outputs, a v3 payload, `bestCLHeightDiff` less than the signed
+   height, and a nonzero quorum root. Extract both final roots.
+8. Enforce the caller's minimum target height. For a bootstrap, require 1–16
+   records with nonempty leaves. Verify every supplied record's double-SHA256
+   leaf hash against its corresponding final root. If a Platform quorum was
+   requested, require exactly one opening matching its type (4 mainnet,
+   6 testnet) and hash. Before using an EvoNode endpoint, require an unambiguously
+   decoded, valid, confirmed high-performance masternode record with a supported
+   HTTPS endpoint.
 9. Publish the new state, key, and eligible EvoNode endpoints only after the entire
    envelope succeeds. Then verify the Platform response signature and GroveDB
    proof before returning application data or advancing Platform freshness state.
@@ -195,24 +218,16 @@ non-duplicate positions are rejected. Transaction and record leaves of exactly
 
 ## Construction and Serving
 
-Core reads historical evidence from retained block files on demand. The producer
-locates coinbase-carried certificates and quorum mining transactions, then supplies
-the certificates, headers, transactions, and Merkle paths required by the wire
-format. No proof-specific index or startup scan is part of this specification.
+A producer supplies a proof from the requested checkpoint to a certified target
+on its active chain, including the requested record openings. It MUST return an
+error if the necessary historical evidence or a valid route within the resource
+limits is unavailable. Each successful response MUST satisfy the verification
+rules above. A ChainLock signature can be used before a later coinbase carries
+it; coinbase inclusion of the signature itself is not required.
 
-Construction uses a fixed view of the active chain. Before returning, the
-producer checks that the target signed block remains on the active chain; a
-conflicting reorganization requires a retry. Missing or pruned block data causes
-an explicit error rather than being interpreted as an absent certificate. A
-producer MUST retain the historical blocks needed by its supported checkpoints.
-
-Construction works backwards from the requested target signer to a quorum present
-in the initial snapshot. For each needed quorum, the producer locates its mining
-transaction and a usable certificate at or after mining. It MAY choose among
-valid certificates to reduce proof size; certificate selection is not part of
-verification or a claim of global minimum size. Construction fails explicitly if
-history, a bridge, or the resource budget is unavailable. Multiple bounded
-requests can advance a checkpoint over longer gaps.
+Multiple bounded proofs can advance an authenticated checkpoint over longer
+gaps. This specification does not require a particular search algorithm, storage
+index, or globally smallest proof.
 
 The Core RPC is:
 
@@ -220,11 +235,9 @@ The Core RPC is:
 getquorumproofchain checkpoint_hash height=0 quorum_hash="" llmq_type=0 node_count=4
 ```
 
-`height=0` chooses the latest usable ChainLock at the current chain tip. The
-signature may already be known to the live ChainLock manager before a later
-coinbase carries it. A positive height is a minimum: the node searches for a
-certificate at or above
-both it and snapshot height plus one. `quorum_hash` and `llmq_type` request one
+`height=0` selects the producer's latest available ChainLock on its active chain.
+A positive height is a minimum: the target must be at or above that height and
+strictly above the checkpoint. `quorum_hash` and `llmq_type` request one
 quorum opening; `node_count` requests zero through fifteen eligible EvoNodes.
 The result contains `proof_hex`, `bootstrap_hex`, and `target`. The bootstrap
 field is empty if no records were requested. Generation supports mainnet/testnet.
@@ -249,50 +262,46 @@ Content-Type: application/json
 
 Success is the binary bootstrap envelope with content type
 `application/octet-stream`; HTTP gzip compression is permitted. A server MUST
-enforce the request and response limits in this DIP and return an error rather
-than trusted fallback keys when it cannot produce or validate the evidence.
-Caching, concurrency, and timeout policy are implementation choices.
+enforce the parameter bounds and decoded response limits in this DIP. Failure
+returns an HTTP error, never trusted fallback keys.
 
 ## Worked Example
 
-Suppose the trusted snapshot is at height `S` and contains quorum `Q0`. A
-request asks for `Q2` at a target height above `S`:
+Suppose a snapshot at height `S` authenticates ChainLock quorum `Q0`. The client
+requests Platform quorum `P` at height `S+30`. One possible proof is:
 
 ```text
-snapshot(Q0) → [certificate C1 + mining transaction Q1]
-             → [certificate C2 + mining transaction Q2]
-             → final certificate + coinbase roots
-             → requested Q2 and EvoNode record openings
+snapshot quorum root → Q0
+Q0 signs block S+12 → headers S+10, S+11 → Q1 mining transaction at S+10
+Q1 signs block S+30 → coinbase → quorum root → Platform quorum P
+                             → masternode root → EvoNode records
 ```
 
-Each certificate is verified with the currently authenticated quorum key. Each
-mining transaction is verified against the signed block, using supplied ancestor
-headers when necessary, and the final coinbase authenticates the record roots.
-The SDK accepts the requested key and endpoints only after the complete sequence
-verifies. The repository's proof fixture and adversarial tests provide a compact
-valid vector and rejection examples.
+The first handoff carries two ancestor headers because its certificate is two
+blocks after the mining transaction. Its derived mining height is `S+12−2`.
+Merkle paths open Q0, Q1's transaction, the final coinbase, and the requested
+records. Q0 and Q1 are ChainLock quorums; P is a separate Platform quorum whose
+key is authenticated by the final root. See [Validation](#validation) for vectors.
 
 ## SDK Integration
 
-Mainnet/testnet network builders use the verified provider by default. Release
-snapshots and untrusted seed addresses are embedded. Proof sources can be seeded
+Mainnet/testnet SDKs use verified mode by default, with independently pinned
+release snapshots and untrusted seed addresses. Proof sources can be seeded
 EvoNodes, quorum servers, or an explicitly supplied list of either. Authenticated
-EvoNode records add connection candidates; addresses themselves never confer
-signing authority.
+EvoNode records provide connection candidates; addresses never confer signing
+authority.
 
 Verified SDK operation requires reachable proof-serving endpoints that can obtain
-the retained historical evidence required by the request.
+the historical evidence required by the request.
 
-The synchronous Platform verifier reports a typed missing-quorum condition. The
-SDK asynchronously obtains a bootstrap proof, verifies it, then repeats the
-complete Platform verification. This applies to reads and transaction results,
-and works without synchronous network calls in browser verification code.
+Before using a Platform quorum key, the SDK MUST authenticate it from the trusted
+snapshot or previously verified state. It MUST then verify the Platform response
+signature and state proof, for both reads and transaction results.
 
-Applications can explicitly select trusted mode or supply their own context
-provider. Trusted mode obtains quorum keys from its configured provider and skips
-the additional Core bootstrap proof download and verification; Platform response
-proof verification remains separately configurable. Failed verified mode MUST NOT
-silently become trusted mode.
+Applications can explicitly select trusted mode, accepting quorum keys from a
+configured source without the Core proof. This choice does not itself disable
+Platform response proof verification. Failed verified mode MUST NOT silently
+become trusted mode.
 
 ## Size and Resource Limits
 
@@ -311,32 +320,27 @@ silently become trusted mode.
 These limits bound individual requests, not the duration of history. Certificate
 availability and quorum cadence determine achievable history per request.
 
-Reference measurements on testnet history were 85,827 / 159,536 / 314,357 gzip
-bytes for 90 / 180 / 366 days respectively. Full-stack archive tests measured
-175,781 raw bytes for a year-long mainnet request and 343,014 raw bytes for a
-year-long testnet request, including one quorum and four EvoNode openings. These
-are observations, not worst-case guarantees. HTTP compression is a transport
-optimization and does not change verification.
-
-The release requirement is less than 500,000 additional SDK download bytes.
-A standalone verifier artifact cannot establish the integrated SDK delta; compare
-matching release targets and compression settings before shipping a release.
-
 ## Validation
 
-The reference implementation includes a valid cross-language fixture and
-adversarial vectors covering truncation, altered signatures, headers, roots,
-records, stale targets, and oversized inputs. See the [Core proof tests][core-tests]
-and [Rust verifier fixture][rust-fixture].
+The [Core test vector][core-vector] supplies a trusted checkpoint, proof bytes,
+and expected target at testnet height 1,549,547. The proof is 3,469 bytes;
+the [matching bootstrap][rust-fixture] is 4,506 bytes with one quorum and one
+EvoNode opening. [Core tests][core-tests] and [Rust tests][rust-tests] exercise
+valid verification and rejection of altered or malformed evidence.
 
-Archive measurements cover 90, 180, and 366 days on testnet, and full-stack
-Core-to-relay-to-SDK runs cover year-long mainnet and testnet histories. The
-measured year-long bootstraps, including one quorum and four EvoNode openings,
-were 175,781 and 343,014 raw bytes respectively. The integrated SDK download
-increase remains a release gate and MUST be measured for each target package.
+[Archive measurements][archive-results] cover 90, 180, and 366 days on both
+networks. [Native SDK integration tests][stack-results] verify live Platform
+queries and year-long histories through Core and a quorum server. The year-long
+bootstraps were 175,781 bytes on mainnet and 343,014 bytes on testnet, each with
+one quorum and four EvoNode openings, before compression. These observations are
+not worst-case bounds or guarantees of history coverage.
 
-[core-tests]: https://github.com/dashpay/dash/blob/platform-sdk-compact-proof/src/test/quorum_proofs_tests.cpp
-[rust-fixture]: https://github.com/PastaPastaPasta/platform/blob/feat/mining-proof-sdk/packages/rs-core-proof/tests/data/bootstrap.bin
+[core-vector]: https://github.com/PastaPastaPasta/dash/blob/9f67367df634/test/functional/data/quorum_proof.json
+[core-tests]: https://github.com/PastaPastaPasta/dash/blob/378d0fb22c28/src/test/quorum_proofs_tests.cpp
+[rust-fixture]: https://github.com/PastaPastaPasta/platform/blob/e243ea60c856/packages/rs-core-proof/tests/data/bootstrap.bin
+[rust-tests]: https://github.com/PastaPastaPasta/platform/blob/e243ea60c856/packages/rs-core-proof/tests/verification.rs
+[archive-results]: https://github.com/PastaPastaPasta/dash/blob/7e7be9bbf4b0/doc/benchmarks/quorum-proof-2026-09-09/README.md
+[stack-results]: https://github.com/PastaPastaPasta/dash/blob/7e7be9bbf4b0/doc/benchmarks/quorum-proof-full-stack-2026-09-09/README.md
 
 ## Security Considerations
 
