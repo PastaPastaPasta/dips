@@ -401,26 +401,22 @@ how often quorums change and which ChainLocks are available.
 
 ## Validation
 
-The [Core test vector][core-vector] supplies a trusted checkpoint, proof bytes,
-and expected target at testnet height 1,549,547. The proof is 3,469 bytes;
-the [matching bootstrap response][rust-fixture] is 4,506 bytes with one quorum
-record, one EvoNode record, and their Merkle paths. [Core tests][core-tests] and
-[Rust tests][rust-tests] check valid proofs and reject altered or malformed ones.
+The [test vector](dip-pasta-compact-quorum-proofs/test-vector.json) provides a
+trusted checkpoint, minimum height, and expected target and record kinds for the
+[bootstrap response](dip-pasta-compact-quorum-proofs/bootstrap.bin) stored with
+this DIP. JSON hashes use RPC display order. Verification must succeed at testnet
+height 1,549,547 and return one quorum record and one masternode record, in that
+order. It must fail if the minimum height is raised above the target, the trusted
+quorum root is changed, or the response's last byte is changed.
 
-[Archive measurements][archive-results] cover 90, 180, and 366 days on both
-networks. [Native SDK integration tests][stack-results] verify live Platform
-queries and year-long histories through Core and a quorum server. The year-long
-bootstrap responses were 175,781 bytes on mainnet and 343,014 bytes on testnet
-before compression. Each included one quorum record, four EvoNode records, and
-their Merkle paths. These measurements are not worst-case size bounds or
-guarantees of history coverage.
+The response is 4,506 bytes. Its first four bytes give the length of the embedded
+proof. The next 3,469 bytes are that proof and can also be tested on their own
+against the same checkpoint and expected target.
 
-[core-vector]: https://github.com/PastaPastaPasta/dash/blob/9f67367df634/test/functional/data/quorum_proof.json
-[core-tests]: https://github.com/PastaPastaPasta/dash/blob/378d0fb22c28/src/test/quorum_proofs_tests.cpp
-[rust-fixture]: https://github.com/PastaPastaPasta/platform/blob/e243ea60c856/packages/rs-core-proof/tests/data/bootstrap.bin
-[rust-tests]: https://github.com/PastaPastaPasta/platform/blob/e243ea60c856/packages/rs-core-proof/tests/verification.rs
-[archive-results]: https://github.com/PastaPastaPasta/dash/blob/7e7be9bbf4b0/doc/benchmarks/quorum-proof-2026-09-09/README.md
-[stack-results]: https://github.com/PastaPastaPasta/dash/blob/7e7be9bbf4b0/doc/benchmarks/quorum-proof-full-stack-2026-09-09/README.md
+Measured year-long responses, including one quorum record and four EvoNode
+records, were 175,781 bytes on mainnet and 343,014 bytes on testnet before
+compression. These are examples, not size guarantees. Implementation tests and
+benchmark details accompany [Core PR #7107](https://github.com/dashpay/dash/pull/7107).
 
 ## Security Considerations
 
