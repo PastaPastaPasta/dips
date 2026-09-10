@@ -80,6 +80,24 @@ DKG, full Core consensus, or the exact active signing-quorum selection for each
 certificate. Membership of a key is not proof of its current signing authority.
 These are deliberate constraints of this compact certificate trust model.
 
+The snapshot is supplied independently; both network responses below remain
+untrusted until the client verifies them:
+
+```mermaid
+flowchart TD
+    snapshot["Pinned Core snapshot"] --> core["Verify Core proof and record openings"]
+    relay["Proof relay: seeded EvoNode or quorum server"] -. "bootstrap evidence" .-> core
+    core --> key["Authenticated Platform quorum key"]
+    core --> nodes["Authenticated EvoNode connection candidates"]
+    key --> platform["Verify Platform signature and state proof"]
+    dapi["Platform DAPI"] -. "response and proof" .-> platform
+    platform --> data["Return verified application data"]
+```
+
+The solid arrows show verification dependencies; dashed arrows show untrusted
+network inputs. These checks establish authenticity under the trust model above;
+the client also enforces its freshness policy.
+
 ## Wire Format
 
 All proof framing integers are unsigned little-endian fixed-width integers.
@@ -270,11 +288,15 @@ returns an HTTP error, never trusted fallback keys.
 Suppose a snapshot at height `S` authenticates ChainLock quorum `Q0`. The client
 requests Platform quorum `P` at height `S+30`. One possible proof is:
 
-```text
-snapshot quorum root → Q0
-Q0 signs block S+12 → headers S+10, S+11 → Q1 mining transaction at S+10
-Q1 signs block S+30 → coinbase → quorum root → Platform quorum P
-                             → masternode root → EvoNode records
+```mermaid
+flowchart TD
+    snapshot["Snapshot quorum root at S"] -->|"membership proof"| q0["ChainLock quorum Q0"]
+    q0 -->|"verifies signature"| c1["Certificate at S+12"]
+    c1 -->|"2 headers and transaction proof"| q1["Q1 commitment and key<br/>in mining transaction at S+10"]
+    q1 -->|"verifies signature"| final["Final certificate at S+30"]
+    final -->|"transaction proof"| coinbase["Final coinbase: quorum and masternode roots"]
+    coinbase -->|"membership proof"| p["Platform quorum P"]
+    coinbase -->|"membership proofs"| nodes["EvoNode records"]
 ```
 
 The first handoff carries two ancestor headers because its certificate is two
@@ -282,6 +304,21 @@ blocks after the mining transaction. Its derived mining height is `S+12−2`.
 Merkle paths open Q0, Q1's transaction, the final coinbase, and the requested
 records. Q0 and Q1 are ChainLock quorums; P is a separate Platform quorum whose
 key is authenticated by the final root. See [Validation](#validation) for vectors.
+
+The two-header bridge expands as follows. Each `hashPrevBlock` link points
+from a checked header to the predecessor whose X11 hash it commits to:
+
+```mermaid
+flowchart RL
+    certified["S+12<br/>signed by Q0"] -->|"hashPrevBlock"| parent["S+11<br/>header"]
+    parent -->|"hashPrevBlock"| mining["S+10<br/>mining header"]
+    mining -->|"Merkle proof"| tx["Q1 mining<br/>transaction"]
+```
+
+No separate ChainLock for `S+10` or `S+11` is needed. If the mining block itself
+has a usable certificate, the handoff carries zero ancestor headers. This bridge
+covers only the gap from a mining block to its certificate; the proof does not
+include every header between the snapshot and the final target.
 
 ## SDK Integration
 
