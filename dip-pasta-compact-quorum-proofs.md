@@ -19,8 +19,10 @@
 1. [Wire Format](#wire-format)
 1. [Verification](#verification)
 1. [Construction and Serving](#construction-and-serving)
+1. [Worked Example](#worked-example)
 1. [SDK Integration](#sdk-integration)
 1. [Size and Resource Limits](#size-and-resource-limits)
+1. [Validation](#validation)
 1. [Security Considerations](#security-considerations)
 1. [Copyright](#copyright)
 
@@ -168,6 +170,9 @@ ambiguous or unsupported masternode encodings are rejected.
    block that precedes the initial snapshot, provided the certificate height still
    advances beyond it. Core proof construction may impose a narrower search window
    when selecting bridges; that is a serving limitation, not a wire-format rule.
+   The commitment MUST use a supported version and quorum type, contain complete
+   canonical signer and valid-member vectors, and satisfy that type's declared
+   size, threshold, quorum-index, public-key, and quorum-hash rules.
 7. Require the final certificate height to strictly exceed the last handoff's
    certificate height, or the trusted snapshot height when there are no handoffs,
    including when the caller's minimum target height is zero. Require the last
@@ -190,27 +195,21 @@ non-duplicate positions are rejected. Transaction and record leaves of exactly
 
 ## Construction and Serving
 
-Core reads historical evidence from block files on demand. ChainLock code locates
-coinbase-carried certificates using exponential search followed by binary search:
-consensus requires the certified height to never decrease, and a non-null
-certificate cannot be followed by a null one. The existing mined-commitment
-database identifies quorum mining blocks; their transactions and Merkle paths
-are read and constructed as needed. No additional persistent index or startup
-scan is required. A bounded certificate cache lasts for one RPC request.
+Core reads historical evidence from retained block files on demand. The producer
+locates coinbase-carried certificates and quorum mining transactions, then supplies
+the certificates, headers, transactions, and Merkle paths required by the wire
+format. No proof-specific index or startup scan is part of this specification.
 
-Construction uses a fixed view of the active chain. Disk reads and proof
-verification run outside the main chain lock; existing quorum database queries
-take short locks. Before returning, Core checks that the target certificate's
-carrier remains on the active chain. A conflicting reorganization requires a
-retry. Missing or pruned block data causes an explicit error rather than being
-interpreted as an absent certificate. Proof-serving nodes should retain the
-historical blocks needed by their supported checkpoints.
+Construction uses a fixed view of the active chain. Before returning, the
+producer checks that the target signed block remains on the active chain; a
+conflicting reorganization requires a retry. Missing or pruned block data causes
+an explicit error rather than being interpreted as an absent certificate. A
+producer MUST retain the historical blocks needed by its supported checkpoints.
 
 Construction works backwards from the requested target signer to a quorum present
-in the initial snapshot. For each needed quorum, the node locates its mining
-transaction and a usable certificate at or after mining. Searching nearby
-certificates minimizes serialized bytes per height advanced; the search can
-expand when a nearby ChainLock is unavailable. This heuristic is not part of
+in the initial snapshot. For each needed quorum, the producer locates its mining
+transaction and a usable certificate at or after mining. It MAY choose among
+valid certificates to reduce proof size; certificate selection is not part of
 verification or a claim of global minimum size. Construction fails explicitly if
 history, a bridge, or the resource budget is unavailable. Multiple bounded
 requests can advance a checkpoint over longer gaps.
@@ -249,10 +248,29 @@ Content-Type: application/json
 ```
 
 Success is the binary bootstrap envelope with content type
-`application/octet-stream`; HTTP gzip compression is permitted. Servers bound
-request sizes, concurrent Core workers, cached bytes, and cache lifetime.
-A timeout does not release a worker permit while its blocking RPC is still
-running. Failure returns an HTTP error, never trusted fallback keys.
+`application/octet-stream`; HTTP gzip compression is permitted. A server MUST
+enforce the request and response limits in this DIP and return an error rather
+than trusted fallback keys when it cannot produce or validate the evidence.
+Caching, concurrency, and timeout policy are implementation choices.
+
+## Worked Example
+
+Suppose the trusted snapshot is at height `S` and contains quorum `Q0`. A
+request asks for `Q2` at a target height above `S`:
+
+```text
+snapshot(Q0) → [certificate C1 + mining transaction Q1]
+             → [certificate C2 + mining transaction Q2]
+             → final certificate + coinbase roots
+             → requested Q2 and EvoNode record openings
+```
+
+Each certificate is verified with the currently authenticated quorum key. Each
+mining transaction is verified against the signed block, using supplied ancestor
+headers when necessary, and the final coinbase authenticates the record roots.
+The SDK accepts the requested key and endpoints only after the complete sequence
+verifies. The repository's proof fixture and adversarial tests provide a compact
+valid vector and rejection examples.
 
 ## SDK Integration
 
@@ -262,8 +280,8 @@ EvoNodes, quorum servers, or an explicitly supplied list of either. Authenticate
 EvoNode records add connection candidates; addresses themselves never confer
 signing authority.
 
-Verified SDK operation requires reachable proof-serving endpoints backed by
-index-enabled Core nodes.
+Verified SDK operation requires reachable proof-serving endpoints that can obtain
+the retained historical evidence required by the request.
 
 The synchronous Platform verifier reports a typed missing-quorum condition. The
 SDK asynchronously obtains a bootstrap proof, verifies it, then repeats the
@@ -293,17 +311,32 @@ silently become trusted mode.
 These limits bound individual requests, not the duration of history. Certificate
 availability and quorum cadence determine achievable history per request.
 
-Real testnet history encoded by the reference implementation measured
-85,827 / 159,536 / 314,357 gzip bytes for 90 / 180 / 366 days respectively.
-The shared short cross-implementation fixture is 3,469 raw proof bytes, or 4,506
-raw bytes with one quorum and one EvoNode opening. These are testnet observations,
-not mainnet measurements or worst-case guarantees. Final record openings add to
-the history-only figures. HTTP compression is a transport optimization and does
-not change verification.
+Reference measurements on testnet history were 85,827 / 159,536 / 314,357 gzip
+bytes for 90 / 180 / 366 days respectively. Full-stack archive tests measured
+175,781 raw bytes for a year-long mainnet request and 343,014 raw bytes for a
+year-long testnet request, including one quorum and four EvoNode openings. These
+are observations, not worst-case guarantees. HTTP compression is a transport
+optimization and does not change verification.
 
 The release requirement is less than 500,000 additional SDK download bytes.
 A standalone verifier artifact cannot establish the integrated SDK delta; compare
 matching release targets and compression settings before shipping a release.
+
+## Validation
+
+The reference implementation includes a valid cross-language fixture and
+adversarial vectors covering truncation, altered signatures, headers, roots,
+records, stale targets, and oversized inputs. See the [Core proof tests][core-tests]
+and [Rust verifier fixture][rust-fixture].
+
+Archive measurements cover 90, 180, and 366 days on testnet, and full-stack
+Core-to-relay-to-SDK runs cover year-long mainnet and testnet histories. The
+measured year-long bootstraps, including one quorum and four EvoNode openings,
+were 175,781 and 343,014 raw bytes respectively. The integrated SDK download
+increase remains a release gate and MUST be measured for each target package.
+
+[core-tests]: https://github.com/dashpay/dash/blob/platform-sdk-compact-proof/src/test/quorum_proofs_tests.cpp
+[rust-fixture]: https://github.com/PastaPastaPasta/platform/blob/feat/mining-proof-sdk/packages/rs-core-proof/tests/data/bootstrap.bin
 
 ## Security Considerations
 
