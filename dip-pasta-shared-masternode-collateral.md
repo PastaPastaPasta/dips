@@ -408,12 +408,15 @@ Payload:
 | proTxHash | uint256 | 32 | The ProRegTx hash of the shared masternode. |
 | shareIndex | uint16_t | 2 | Index into the share table of the share being updated. |
 | rewardScriptSize | compactSize uint | 1-9 | Size of the new reward script. |
-| rewardScript | Script | Variable | New reward script (P2PKH/P2SH), or zero length for "use refundScript". |
+| rewardScript | Script | Variable | New reward script (P2PKH/P2SH). The script must be non-empty. |
 | inputsHash | uint256 | 32 | Hash of all transaction inputs, as in DIP-0003 update payloads. |
 | payloadSigSize | compactSize uint | 1-9 | Size of the signature. Must encode 65. |
 | payloadSig | unsigned char[] | Variable | Canonical signature by `shares[shareIndex].ownerKeyID` over the payload hash (with this field empty). |
 
-A ProUpShareTx updates exactly one share's `rewardScript` and nothing else.
+A ProUpShareTx updates exactly one share's `rewardScript` and nothing else. An
+update must include an explicit, non-empty reward script; the zero-length
+`rewardScript` form is not valid for ProUpShareTx because reward scripts must
+remain directly filterable by bloom filters.
 Share `amount`, `refundScript`, `ownerKeyID`, the participant count, the
 penalty, and the early period are immutable for the life of the masternode. The
 new reward script is subject to the same script-type, payee-reuse, and template
