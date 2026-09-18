@@ -197,7 +197,11 @@ replaced here:
 7. Every share `amount` is at least 100 DASH, and the amounts sum exactly to
    the required collateral.
 8. `0 <= earlyPenalty < min(share amounts)`, and `earlyPeriodBlocks` does not
-   exceed 420480 blocks (approximately two years at 2.5-minute blocks).
+   exceed 420480 blocks (approximately two years at 2.5-minute blocks). If
+   `earlyPeriodBlocks` is zero, `earlyPenalty` must be zero: with no early
+   period the penalty is never required, but it would still act as the
+   unilateral bonus ceiling (output rule 6), leaving that much of the actor's
+   share extractable by a stolen owner key for the life of the masternode.
 9. No two shares have the same `ownerKeyID`; no share `ownerKeyID` equals any
    owner key registered by any other masternode (see
    [Masternode List State](#masternode-list-state)); duplicate `refundScript`s
@@ -222,11 +226,13 @@ keyIdVoting || pubKeyOperator || operatorReward ||
 shares || earlyPeriodBlocks || earlyPenalty
 ```
 
-where `inputsHash` and `outputsHash` are as defined in DIP-0003, and `shares`
-is the share table exactly as serialized in the payload, including the leading
-`sharesCount` byte. Every field uses its payload or transaction serialization,
-and the leading tag is serialized as a compactSize-length-prefixed string, not
-as bare bytes. Shared registrations are type 0, so no Platform payload fields
+where `inputsHash` is as defined in DIP-0003, `outputsHash` is the
+double-SHA256 of the concatenated serialized transaction outputs in order with
+no count prefix (the same construction as `inputsHash`, over outputs instead of
+input prevouts), and `shares` is the share table exactly as serialized in the
+payload, including the leading `sharesCount` byte. Every field uses its
+payload or transaction serialization, and the leading tag is serialized as a
+compactSize-length-prefixed string, not as bare bytes. Shared registrations are type 0, so no Platform payload fields
 exist to hash. `collateralOutpoint` is deliberately absent: only one output of
 the transaction may carry the template (see
 [Collateral Spend Enforcement](#collateral-spend-enforcement)), so
@@ -411,7 +417,7 @@ Payload:
 | rewardScript | Script | Variable | New reward script (P2PKH/P2SH). The script must be non-empty. |
 | inputsHash | uint256 | 32 | Hash of all transaction inputs, as in DIP-0003 update payloads. |
 | payloadSigSize | compactSize uint | 1-9 | Size of the signature. Must encode 65. |
-| payloadSig | unsigned char[] | Variable | Canonical signature by `shares[shareIndex].ownerKeyID` over the payload hash (with this field empty). |
+| payloadSig | unsigned char[] | Variable | Canonical signature by `shares[shareIndex].ownerKeyID` over the payload hash (`payloadSigSize` and `payloadSig` omitted entirely, not serialized as empty). |
 
 A ProUpShareTx updates exactly one share's `rewardScript` and nothing else. An
 update must include an explicit, non-empty reward script; the zero-length
@@ -437,14 +443,17 @@ Payload:
 | --- | --- | --- | --- |
 | version | uint16_t | 2 | Payload version. Currently 1. |
 | proTxHash | uint256 | 32 | The ProRegTx hash of the shared masternode. |
-| pubKeyOperator | BLSPubKey | 48 | New operator public key. |
+| pubKeyOperator | BLSPubKey | 48 | New operator public key, in the basic (non-legacy) BLS encoding. |
 | keyIdVoting | CKeyID | 20 | New voting key ID. |
 | inputsHash | uint256 | 32 | Hash of all transaction inputs, as in DIP-0003 update payloads. |
 | sigCount | uint8_t | 1 | Must equal `sharesCount`. |
-| sigs | signature[sigCount] | 65 * sigCount | Canonical signatures over the payload hash (with this field empty), one per share, in share order. |
+| sigs | signature[sigCount] | 65 * sigCount | Canonical signatures over the payload hash (`sigCount` and `sigs` omitted entirely, not serialized as empty), one per share, in share order. |
 
 A ProUpSharedRegTx updates the whole-masternode registrar fields and requires
 one valid signature from every current share owner key, in share order.
+`pubKeyOperator` is always serialized and validated in the basic BLS encoding:
+shared masternodes only exist after the v24 activation that also retires the
+legacy scheme, so a legacy-encoded key is invalid here.
 Operator-key change semantics (service reset) match ProUpRegTx in DIP-0003. A
 ProUpSharedRegTx referencing a non-shared masternode is invalid, and a plain
 ProUpRegTx referencing a shared masternode is invalid. The payload hash each
@@ -549,7 +558,13 @@ collateral-spend phase, share owner keys freed by a ProDisTx become reusable
 by a new registration only from the following block.
 
 Mempool implementations should additionally evict pending ProUpShareTx and
-ProUpSharedRegTx transactions for a masternode when its ProDisTx confirms.
+ProUpSharedRegTx transactions for a masternode when its ProDisTx confirms, and
+should evict a pending ProUpShareTx or ProUpSharedRegTx whose counterpart
+confirms in a way that makes it violate the voting-key/payee separation rule
+(a confirmed registrar update setting a voting key that a pending share update
+pays, or a confirmed share update paying a key that a pending registrar update
+sets as the voting key): such a transaction can never be mined against the new
+tip and would otherwise linger until expiry.
 
 ### Forbidden Template Destinations
 
@@ -737,7 +752,9 @@ coinbase fan-out and masternode state size. The 100 DASH minimum share keeps
 shares meaningful and bounds fragmentation. The two-year cap on the early
 period prevents unbounded penalty windows. `earlyPenalty < min(share amounts)`
 guarantees the actor a positive remainder, so a dissolution can always pay its
-own fee.
+own fee. A nonzero `earlyPenalty` with a zero `earlyPeriodBlocks` is rejected
+because it is never required yet still bounds unilateral bonuses, so it would
+only serve as a drain ceiling for a stolen share owner key.
 
 ## Test Cases
 
@@ -748,7 +765,8 @@ Implementations should include tests for at least the following:
    payload with an empty share table and zeroed penalty fields.
 2. Invalid: shared Evo registration; external shared collateral; share sum not
    equal to the collateral; share below 100 DASH; `earlyPenalty >= min(share)`;
-   early period above the cap; non-empty DIP-0026 `payouts` with shares;
+   nonzero `earlyPenalty` with `earlyPeriodBlocks == 0`; early period above
+   the cap; non-empty DIP-0026 `payouts` with shares;
    non-zero `keyIdOwner`; a non-shared version 3 payload with non-zero
    `joinSigs`, `earlyPeriodBlocks`, or `earlyPenalty`.
 3. Invalid: duplicate share owner key within the table or across masternodes
