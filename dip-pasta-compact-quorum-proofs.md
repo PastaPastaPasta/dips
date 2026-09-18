@@ -279,9 +279,11 @@ or bootstrap response.
    Verify the transaction's Merkle path against the oldest supplied header's
    transaction root, or the signed header's root if there are no ancestors.
    The transaction index must be nonzero, and ancestor count must be less than
-   certificate height. Require a complete, canonical v3 quorum-commitment
-   transaction with no inputs or outputs, zero locktime, and a v1 payload whose
-   height equals certificate height minus ancestor count.
+   certificate height. Require a complete, canonical quorum-commitment
+   transaction of special version 3 or above, with a v1 payload whose height
+   equals certificate height minus ancestor count. Its inputs, outputs and
+   locktime MUST NOT be constrained: consensus does not restrict them, and the
+   Merkle path already binds the transaction to the signed header.
 6. **Continue with the next key.** Check the transaction's full, non-null quorum
    commitment using the commitment rules above. Its quorum identity must differ
    from the current one. Use its key for the next certificate. The mining block
@@ -292,8 +294,10 @@ or bootstrap response.
    handoffs, even when the caller's minimum height is zero. Check the last key's
    ChainLock quorum type and the final signature as in step 4. Verify the
    coinbase's Merkle path at transaction index zero against the signed header.
-   Require a complete v3 coinbase transaction with one coinbase input, a scriptSig
-   of 1–100 bytes, and 1–4,096 outputs. Its payload must be v3, with height equal
+   Require a complete coinbase transaction of special version 3 or above with one
+   coinbase input, a scriptSig of 1–100 bytes, and at least one output. The
+   output count MUST NOT be capped beyond the transaction blob limit, which
+   consensus also enforces. Its payload must be v3 or above, with height equal
    to the signed height, `bestCLHeightDiff` less than that height, and a nonzero
    quorum root. Read the quorum and masternode roots from this payload.
 8. **Check the requested height and records.** The final height must meet the
