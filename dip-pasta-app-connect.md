@@ -25,8 +25,8 @@
     * [Transitional dash-key Carrier](#transitional-dash-key-carrier)
 1. [Request Body](#request-body)
     * [Layout](#layout)
-    * [TLV Rules](#tlv-rules)
-    * [TLV Types](#tlv-types)
+    * [Fields](#fields)
+        * [Field Rules](#field-rules)
     * [Authentication Bindings](#authentication-bindings)
     * [Encryption Bindings](#encryption-bindings)
 1. [App Identity](#app-identity)
@@ -37,6 +37,7 @@
     * [Limits](#limits)
     * [Session Keys](#session-keys)
     * [Encryption Keys](#encryption-keys)
+        * [Rotation](#rotation)
     * [Identity Updates](#identity-updates)
     * [Publishing the Response](#publishing-the-response)
     * [Return Link](#return-link)
@@ -244,11 +245,11 @@ them on mainnet and SHOULD remove them.
 ## Layout
 
 ```text
-body = 0x02 ‖ appEphPub (33) ‖ appId (32) ‖ labelLen (1) ‖ label (labelLen) ‖ TLV*
-TLV  = type (1) ‖ length (1) ‖ value (length)
+body  = 0x02 ‖ appEphPub (33) ‖ appId (32) ‖ labelLen (1) ‖ label (labelLen) ‖ field*
+field = type (1) ‖ length (1) ‖ value (length)
 ```
 
-| Field | Rule |
+| Part | Rule |
 | --- | --- |
 | version | `0x02`. Any other value is `unsupported` |
 | `appEphPub` | A compressed secp256k1 point, fresh for every request |
@@ -257,20 +258,11 @@ TLV  = type (1) ‖ length (1) ‖ value (length)
 
 A body is at most 1,024 bytes on every carrier. The request hash is `hash160(appEphPub)`. It identifies the request on Platform.
 
-## TLV Rules
+## Fields
 
-* **Even types are mandatory to understand.** A wallet that meets an unknown even type MUST refuse
-  the request as `unsupported`.
-* **Odd types are optional.** A wallet MUST skip an unknown odd type.
-* TLVs appear in ascending type order. Among known types only `AUTH_BINDING` and `ENC_BINDING` may
-  repeat; an unknown odd type may also repeat. Repeats are adjacent.
-* Anything out of order, a repeated known singleton, more instances of a type than its count allows,
-  a missing REQUIRED type, a known type with the wrong length or an invalid value, or a TLV running
-  past the end of the body makes the request `invalid`.
-* `CREATED_AT` MUST be non-zero. `CREATED_AT` and `expiresAt` values above 2^53 − 1 are `invalid`,
-  so that implementations whose integers are IEEE 754 doubles agree.
-
-## TLV Types
+After the label, the body is a list of fields. Each field is a TLV (type, length, value): one byte
+naming the field, one byte giving the value's length, then the value. Because every field states its
+length, a wallet can step over a field it does not know.
 
 | Type | Name | Count | Value |
 | --- | --- | --- | --- |
@@ -281,11 +273,38 @@ A body is at most 1,024 bytes on every carrier. The request hash is `hash160(app
 | `0x05` | `MODE` | 0–1 | `1` means renew. Absent means login. Any other value is `invalid` |
 | `0x06` | `CREATED_AT` | 1 | `u64`, milliseconds since the Unix epoch, when the app made the request |
 
-`CREATED_AT` and at least one `AUTH_BINDING` are REQUIRED.
+Count is how many times the field may appear. `CREATED_AT` and at least one `AUTH_BINDING` are
+REQUIRED.
+
+For example, the [request vector](#request-vector) carries five fields after its label `Yappr`:
+
+| Bytes | Field |
+| --- | --- |
+| `02 32 …` | `AUTH_BINDING`, 50 bytes: a contractGroup key at CRITICAL |
+| `02 3a …` | `AUTH_BINDING`, 58 bytes: a documentType key for DashPay `profile` |
+| `03 10 …` | `CONNECTION_ID`, 16 bytes |
+| `04 21 …` | `ENC_BINDING`, 33 bytes: an ENCRYPTION key for `appId` |
+| `06 08 …` | `CREATED_AT`, 8 bytes |
 
 This DIP does not define the semantics of `MODE = 1`. A wallet MAY process a renew request as a
 login. Apps renew by sending a new login request with the same `CONNECTION_ID` and an
 `IDENTITY_HINT`.
+
+### Field Rules
+
+* **Unknown fields.** A later revision can add fields. An odd type is optional: a wallet that does
+  not know it MUST skip it, so a new hint or display detail does not break older wallets. An even
+  type changes what the user would grant: a wallet that does not know it MUST refuse the request as
+  `unsupported`, rather than grant less than the app asked for without saying so.
+* **One encoding.** Fields appear in non-decreasing type order, so repeated fields are adjacent. A
+  field whose count is 0–1 or 1 appears at most once. So no request can be encoded two ways, and two
+  implementations cannot disagree about whether a request is valid.
+* **Invalid input.** A field out of order, appearing more times than its count allows, missing
+  when REQUIRED, with the wrong length or an invalid value, or running past the end of the body
+  makes the request `invalid`. An unknown odd type may repeat.
+* **Integers.** `CREATED_AT` MUST be non-zero. `CREATED_AT` and `expiresAt` values above 2^53 − 1 are
+  `invalid`, so that implementations whose integers are IEEE 754 doubles, such as JavaScript, read
+  them the same way as the others.
 
 ## Authentication Bindings
 
@@ -293,10 +312,10 @@ login. Apps renew by sending a new login request with the same `CONNECTION_ID` a
 AUTH_BINDING = kind (1) ‖ securityLevel (1) ‖ id (32) ‖ totalBudget (u64) ‖ expiresAt (u64) [‖ nameLen (1) ‖ name]
 ```
 
-| Field | Rule |
+| Part | Rule |
 | --- | --- |
 | kind | `0` singleContract, `1` documentType, `2` contractGroup (the bincode tags of Platform's `ContractBounds`). An unknown kind is `unsupported` |
-| securityLevel | `1` CRITICAL, allowed only on a contractGroup binding; `2` HIGH, allowed on every kind. Anything else is `invalid` |
+| securityLevel | `1` CRITICAL or `2` HIGH, on any kind. Anything else is `invalid` |
 | id | The contract id, or the group id for a contractGroup binding |
 | totalBudget | Proposed lifetime budget in credits. `0` means no proposal. A contractGroup binding MUST carry a non-zero budget |
 | expiresAt | Proposed expiry as a block time. `0` means no proposal |
@@ -305,7 +324,7 @@ AUTH_BINDING = kind (1) ‖ securityLevel (1) ‖ id (32) ‖ totalBudget (u64) 
 The first `AUTH_BINDING` is the primary binding. Two bindings with the same kind, id and name make
 the request `invalid`.
 
-A binding's index among the request's `AUTH_BINDING` TLVs, from 0 to 3, is its `bindingIndex`.
+A binding's index among the request's `AUTH_BINDING` fields, from 0 to 3, is its `bindingIndex`.
 
 ## Encryption Bindings
 
@@ -313,7 +332,7 @@ A binding's index among the request's `AUTH_BINDING` TLVs, from 0 to 3, is its `
 ENC_BINDING = contractId (32) ‖ purpose (1)
 ```
 
-| Field | Rule |
+| Part | Rule |
 | --- | --- |
 | contractId | The data contract the key is bound to |
 | purpose | `1` ENCRYPTION, `2` DECRYPTION. Anything else is `invalid` |
@@ -371,18 +390,20 @@ breaks one is `invalid`.
   `requiresIdentityEncryptionBoundedKey` (for ENCRYPTION) or `requiresIdentityDecryptionBoundedKey`
   (for DECRYPTION) is `0` (unique) or `2` (multiple, reference to latest). It need not be owned by
   `appId`'s owner. A contract without that setting, with the value `1` (which keeps no current key),
-  or with the requirement only on a document type, is `invalid`. An `ENC_BINDING` naming a system
-  contract, such as DashPay, is `invalid`: those keys belong to the wallet's own features.
+  or with the requirement only on a document type, is `invalid`. An `ENC_BINDING` MAY name a system
+  contract that meets these conditions, and the wallet SHOULD then warn that the app will be able to
+  read that feature's data in every app the user uses it in. DashPay does not qualify: it sets the
+  requirement on its `contactRequest` document type only, so DIP-15's keys cannot be requested
+  through App Connect.
 
 The user MAY decline any binding except the primary one. Declining the primary binding declines the
 request.
 
 ## Security Levels
 
-* A contractGroup session key MAY be CRITICAL if its binding asks for CRITICAL, and otherwise is
-  HIGH. Platform requires CRITICAL for batches that contain token transitions, and a CRITICAL key
-  bounded to a group can act only on that group's contracts and tokens.
-* Every other session key is HIGH.
+* A session key has the level its binding asks for: CRITICAL or HIGH. Platform requires CRITICAL
+  for batches that contain token transitions, and for document types that demand it. A CRITICAL
+  key is still bounded, so it can act only within its binding's contract, document type or group.
 * Encryption keys are MEDIUM.
 * A wallet MUST NOT grant a MASTER key, a TRANSFER key, or any authentication key without contract
   bounds through `connect`.
@@ -411,7 +432,7 @@ requestId = hash256(appEphPub ‖ u8(bindingIndex))
 * `coin'` is `5'` on mainnet and `1'` on testnet and devnet.
 * `identityId'` and `requestId'` are 256-bit hardened DIP-14 indexes.
 * `appEphPub` is the request's 33-byte compressed key. `bindingIndex` is the binding's index among
-  the request's `AUTH_BINDING` TLVs, counting declined bindings, so a key does not depend on what
+  the request's `AUTH_BINDING` fields, counting declined bindings, so a key does not depend on what
   the user declined.
 * `hash256(appEphPub)` without the index byte is reserved for the earlier one-key protocol, so a key
   derived under this DIP never collides with one.
@@ -437,30 +458,66 @@ slightly less, while every session key signs at least once.
 The wallet derives encryption keys at the DIP-13 application encryption sub-feature:
 
 ```text
-m / 9' / coin' / 5' / 7' / 0' / identityId' / contractId' / purpose'
+m / 9' / coin' / 5' / 7' / 0' / identityId' / contractId' / purpose' / rotation'
 ```
 
 * `contractId'` is the bound contract's id as a 256-bit hardened DIP-14 index.
 * `purpose'` is `1'` for ENCRYPTION and `2'` for DECRYPTION.
+* `rotation'` is a 31-bit hardened index (`ser32(rotation + 2^31)`, as in DIP-13): `0'` for the
+  first key and one higher for each [rotation](#rotation).
 * The key is registered as ECDSA_SECP256K1 (peers need the point), MEDIUM, bound
   `singleContract(contractId)`.
 
 This derivation is normative: the user's other devices, other wallets and other apps on the same
-contract must find the same key. There is one key per (identity, contract, purpose). Replacing it
-is not defined by this DIP.
+contract must find the same key.
+
+The identity's **current key** for a (contract, purpose) is the key Platform records as current for
+that contract and purpose, if it is enabled. Platform keeps that record even after the key is
+disabled: permanently when the contract's requirement is `0` (unique), and until a newer key is
+added when it is `2`. An identity has at most one current key per (contract, purpose).
+
+Rotations are registered in order, so a wallet finds the keys at this path by deriving rotations
+`0'`, `1'`, `2'`, … and stopping at the first one whose key is not on the identity in any state.
 
 For each granted encryption binding, in this order:
 
-1. If the key at this path is on the identity in any state: when it is the identity's current key
-   for that contract and purpose, the wallet MUST send it and register nothing; otherwise (disabled,
-   or no longer current) it MUST omit the binding's slot.
-1. Otherwise, if the identity has a current key for that contract and purpose (one the wallet
-   cannot derive at this path), the wallet MUST omit the slot.
-1. Otherwise, the wallet MUST register the key and send it.
+1. If the identity has a current key for that contract and purpose, the wallet registers nothing.
+   If it holds that key's private key, whether at this path or at another path it derives the
+   identity's keys on, it SHOULD send it and MAY omit the slot instead. Otherwise it MUST omit the
+   slot.
+1. Otherwise, if any key is on the identity for that contract and purpose (all of them disabled),
+   the wallet MUST omit the slot. Under the requirement `0` Platform would refuse a second key.
+1. Otherwise, the wallet MUST register rotation `0'` and send it.
 
-A wallet MUST NOT hand out any key not derived at this path.
+A wallet MUST NOT send a key that is not the identity's current key for the binding's contract and
+purpose, and a login never registers a key next to a current one.
 
-A login never replaces an encryption key.
+### Rotation
+
+Rotation replaces the current key with a new one, so that apps holding the old key cannot read
+what is encrypted to the new one. A wallet MAY offer it. It MUST be an explicit action the user
+takes in the wallet, and never part of a login or an approval sheet.
+
+Rotation is possible only for a contract whose requirement is `2`. Under `0`, Platform keeps the
+first key in the slot even after it is disabled and refuses any other, so a wallet MUST NOT offer
+rotation for such a contract, and MUST NOT disable its key.
+
+To rotate a (contract, purpose), the wallet derives the next rotation after the highest one on the
+identity at this path (`0'` if there is none) and registers it in one MASTER-signed `IdentityUpdate`
+that also disables the current key. Platform makes the newer key current.
+
+* Anyone holding an earlier key can still read data that was encrypted to it.
+* Apps receive the new key at their next login, under the rules above.
+* An app MUST check that an encryption key is still the identity's current key before encrypting
+  to it, and MUST stop using a key that is no longer current. Peers SHOULD encrypt to the
+  recipient's current key, not to a key id they cached. A rotation protects new data only as far
+  as apps follow these rules.
+* ENCRYPTION and DECRYPTION keys rotate separately. To cut an app off from a contract, the user
+  rotates every (contract, purpose) it was granted.
+* A wallet restored from seed derives every rotation, so it can still read the old data. On
+  testnet and devnet it SHOULD also derive the earlier path without the rotation level (see
+  [Deployment and Compatibility](#deployment-and-compatibility)), or it cannot read data encrypted
+  to such a key and has to omit it at login.
 
 ## Identity Updates
 
@@ -514,14 +571,16 @@ The sheet's content is wallet policy. It SHOULD say in plain words what the app 
 do, what it may spend and for how long, and what it cannot do. In particular, it SHOULD show:
 
 * the `appId`, shortened, with the full id and a copy action one step away;
-* the request's label in quotes, marked as given by the app, or the wallet's own name for a known
-  app id; and for an unknown app id, a neutral note with no warning colour and no extra step;
+* the request's label in quotes, marked as given by the app. A wallet's own name for a well-known
+  app id MAY be shown next to it, never instead of it;
 * one line per binding, with each binding but the primary one as an option the user can turn off;
 * each budget in DASH and each expiry as a date;
 * for a contractGroup key, that it also covers contracts added to the group later;
-* for a CRITICAL key, that it can use the app's tokens on the user's behalf;
-* for each encryption binding, which contract's encrypted data the app will be able to read, and
-  whether that contract belongs to the app's owner;
+* for a CRITICAL key, a clear warning that it can do everything its bounds allow at that level,
+  including moving the user's tokens on those contracts;
+* for each encryption binding, which contract's encrypted data the app will be able to read,
+  whether that contract belongs to the app's owner, and a warning for a system contract such as
+  DashPay;
 * what the app cannot do, such as move credits, register names or change keys;
 * how long ago the request was made.
 
@@ -529,7 +588,8 @@ do, what it may spend and for how long, and what it cannot do. In particular, it
 
 A wallet SHOULD let the user disconnect an app. Disconnecting disables the app's live session keys
 on Platform. It MUST NOT disable encryption keys, which other devices and apps may rely on, so an
-app keeps any encryption key it was given.
+app keeps any encryption key it was given. Where the contract allows it, the user can
+[rotate](#rotation) the key so that the app cannot read what is encrypted afterwards.
 
 # Response
 
@@ -659,7 +719,7 @@ The `ac` value appended to a return link:
 | `ok` | Keys registered and the response published | Signed, and the broadcast was accepted |
 | `declined` | The user declined | The user declined |
 | `stale` | `CREATED_AT` too old or too far ahead | `exp` passed, or the nonce or revision is out of date |
-| `unsupported` | An unknown version, even TLV type or binding kind, or an unknown `v` | An unknown `v`, or a transition not signed by an identity key |
+| `unsupported` | An unknown version, even field type or binding kind, an unknown `v`, or bindings the wallet does not support yet (see [Deployment and Compatibility](#deployment-and-compatibility)) | An unknown `v`, or a transition not signed by an identity key |
 | `invalid` | Malformed, or breaks a rule of this DIP | Malformed or already signed |
 | `failed` | Wrong network, no identity matching `IDENTITY_HINT`, a derived key already on the identity with other limits, or approved but registering or publishing failed | Wrong network or identity, no eligible key, or anything else |
 
@@ -687,9 +747,10 @@ app's claim, next to the app id.
 group's owner and administrators can add contracts after the grant. Wallets SHOULD say so on the
 approval sheet, and apps SHOULD check their group before requesting such a key.
 
-**CRITICAL keys.** A CRITICAL session key can sign token transitions on the group's contracts. Its
-credit budget limits fees, not the number of tokens it moves. It is acceptable only because it is
-bounded to the app's contract group; a wallet never grants an unbounded authentication key.
+**CRITICAL keys.** A CRITICAL session key can sign token transitions, and writes to document types
+that require CRITICAL, within its bounds. Its credit budget limits fees, not the number of tokens it
+moves. It is acceptable only because it is bounded; a wallet never grants an unbounded
+authentication key. Wallets SHOULD warn clearly before granting one.
 
 **Encryption keys are shared by everyone using a contract.** The key for a (contract, purpose) is
 the same whichever app asks for it. That is what lets the user read their data on another device or
@@ -698,12 +759,13 @@ whichever app it was written through. What a key exposes depends on the contract
 DIP-15's pairing, the ENCRYPTION key exposes what the user sends and the DECRYPTION key what the
 user receives.
 
-**Encryption keys cannot be taken back.** Disconnect does not disable them and this DIP does not
-define replacing them, so an app that received one keeps it, including for data written later.
-Since an encryption binding may name a contract the app's owner does not control, a request for the
-keys of a popular messaging contract is the obvious phishing target. Wallets SHOULD show which
-contracts' data an app will be able to read, and clearly flag contracts not owned by the app's
-owner.
+**Encryption keys cannot be taken back, only rotated.** Disconnect does not disable them, so an app
+that received one keeps it and can read everything encrypted to it. A [rotation](#rotation), where
+the contract allows one, protects data encrypted afterwards, as far as apps and peers encrypt only
+to current keys. Under the requirement `0` a key can never be replaced.
+Since an encryption binding may name a contract the app's owner does not control, a request for the keys of a popular messaging contract is the obvious phishing target.
+Wallets SHOULD show which contracts' data an app will be able to read, clearly flag contracts not
+owned by the app's owner, and warn most strongly for system contracts.
 
 **Return links.** A wallet that opens `cb` does so right after the user approved something, which
 is a natural moment for a fake follow-up page. `cb` carries only a status. Wallets SHOULD show the
@@ -732,13 +794,22 @@ expect.
   bounded, budgeted and expiring keys.
 * The `dash-key:` v2 carrier is transitional. Wallets MAY accept it on testnet and devnet and MUST
   NOT accept it on mainnet. The `dash-key:` v1 and `dash-st:` URIs MUST NOT be accepted on mainnet.
-* Wallets built before this DIP allowed at most two encryption bindings, each for `appId`. On the
-  `dash-key:` carrier an app SHOULD NOT send more than two encryption bindings, or one for another
-  contract, since those wallets refuse the whole request. A wallet that accepts `dashpay://connect` implements this DIP in full, so apps
-  can send any valid request on that carrier.
+* A wallet MAY at first support a subset of the bindings: encryption bindings for `appId` only and
+  at most two of them, and CRITICAL only on contractGroup bindings. Such a wallet MUST refuse a
+  request that asks for more as `unsupported`, and MUST NOT grant less than was asked instead. Apps
+  SHOULD assume that a wallet reached through `dash-key:` supports only this subset. There is no
+  way for an app to learn in advance what a wallet supports, so apps SHOULD ask for no more than
+  they need, and SHOULD tell the user, when a wallet refuses a request as `unsupported`, that the
+  wallet needs an update. Wallets built before this DIP refuse CRITICAL on another binding kind as
+  `invalid`.
 * Apart from naming a system contract as `appId`, which earlier wallets did not refuse, a request
   that is valid under the earlier rules is valid under this DIP, and a grant made by an earlier
   wallet keeps working.
+* Wallets built before this DIP derived encryption keys at
+  `m/9'/coin'/5'/7'/0'/identityId'/contractId'/purpose'`, without the rotation level, on testnet
+  and devnet only. Such a key is a current key at another path the wallet derives on, so under
+  [Encryption Keys](#encryption-keys) a wallet MAY keep sending it. A wallet that wants it at this
+  DIP's path [rotates](#rotation) it.
 
 # Test Vectors
 
@@ -830,12 +901,17 @@ DIP-14 indexes: every byte `0x35`, every byte `0x6b`, bytes `00 01 … 1f`, and 
 | Path | Public key |
 | --- | --- |
 | `m/9'/1'/5'/6'/0'/0x35…'/0x6b…'` | `022c8b2e806244482374b1caf8306146dc03aad3b99a5954efd5e70a0eddd37a5d` |
-| `m/9'/5'/5'/7'/0'/0x35…'/0x6b…'/1'` | `03e989de1b62f137231cc06659c810c17100becd1f5e23d5710faa7602769fe434` |
+| `m/9'/5'/5'/7'/0'/0x35…'/0x6b…'/1'/0'` | `031a882c119e2b1f8e0349b444d877afa2599efeef49a26930fd25518cb6e9d57a` |
+| `m/9'/5'/5'/7'/0'/0x35…'/0x6b…'/1'/1'` | `03d0f6f0f48d968b9554d8e7fe467d7135bacf29d5c4994ca593bd10ebeed696f6` |
 | `m/9'/1'/5'/6'/0'/asc'/desc'` | `0278ad78c1a220924bf0e06e1111c61422efeace068f30efa825604b436970b230` |
-| `m/9'/5'/5'/7'/0'/asc'/desc'/1'` | `03c4e462229f176595ec17e28e9096d3cfbc42496fb8ed4d48f8f58355d6105aa9` |
-| `m/9'/5'/5'/7'/0'/asc'/desc'/2'` | `031fd0a3cfc01bebb89d43c2e12a6321c37ebdacb62c09495899e5b65a24fa5c99` |
+| `m/9'/5'/5'/7'/0'/asc'/desc'/1'/0'` | `02dfed57ddaaea8c0758e8da44513520038eb8d6b0b92109953c14d6ab1087259b` |
+| `m/9'/5'/5'/7'/0'/asc'/desc'/2'/0'` | `020bcde800f41ad1f924477a9502f111445224cc9ab70114ae4e5099ba02bdd034` |
+| `m/9'/5'/5'/7'/0'/asc'/desc'/2'/1'` | `021b97869c21933673076a938337c28848c8bf8094bbe6883e3a4acbf33c639072` |
 
-These are pinned in rust-dashcore `key-wallet` (`bip32.rs`).
+The session key rows are pinned in rust-dashcore `key-wallet` (`bip32.rs`). The encryption key rows
+add the rotation level; rust-dashcore pins the same paths without it (for example `…/0x35…'/0x6b…'/1'`
+is `03e989de1b62f137231cc06659c810c17100becd1f5e23d5710faa7602769fe434`), and their keys are the
+parents of these.
 
 # Reference Implementations
 
@@ -846,7 +922,8 @@ These are pinned in rust-dashcore `key-wallet` (`bip32.rs`).
   [#1204](https://github.com/dashpay/dashwallet-ios/pull/1204) and
   [#1210](https://github.com/dashpay/dashwallet-ios/pull/1210); dash-wallet
   [#1604](https://github.com/dashpay/dash-wallet/pull/1604). These implement the transitional
-  carrier and encryption bindings for `appId` only.
+  carrier, encryption bindings for `appId` only, CRITICAL only on contractGroup bindings, and the
+  encryption path without the rotation level.
 * Response contract: `packages/app-connect-contract` in `dashpay/platform`.
 
 # Copyright
