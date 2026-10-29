@@ -485,8 +485,10 @@ For each granted encryption binding, in this order:
    If it holds that key's private key, whether at this path or at another path it derives the
    identity's keys on, it SHOULD send it and MAY omit the slot instead. Otherwise it MUST omit the
    slot.
-1. Otherwise, if any key is on the identity for that contract and purpose (all of them disabled),
-   the wallet MUST omit the slot. Under the requirement `0` Platform would refuse a second key.
+1. Otherwise, if any key is on the identity for that contract and purpose, the wallet MUST omit
+   the slot. None of them is current: the key Platform records as current is disabled, though an
+   older key may still be enabled. Under the requirement `0` Platform would refuse a second key,
+   and under `2` a new key would be a rotation, which is never part of a login.
 1. Otherwise, the wallet MUST register rotation `0'` and send it.
 
 A wallet MUST NOT send a key that is not the identity's current key for the binding's contract and
