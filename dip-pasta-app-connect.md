@@ -366,7 +366,7 @@ A wallet:
 1. The wallet MUST decode the request under every rule of [URIs](#uris) and
    [Request Body](#request-body), and refuse with `unsupported` or `invalid`.
 1. The wallet MUST refuse a request whose `CREATED_AT` is more than 10 minutes behind the wallet's
-   clock, or more than 2 minutes ahead of it, as `stale`.
+   device clock, or more than 2 minutes ahead of it, as `stale`.
 1. A wallet that holds several identities MUST ask which one signs in, and MUST NOT pick one
    silently. With an `IDENTITY_HINT`, it MUST offer only that identity, and refuse if it does not
    hold it.
